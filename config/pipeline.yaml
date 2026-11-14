@@ -1,0 +1,50 @@
+resample_hz: 120
+flip_y: true               # Kinovea: y hacia abajo. Poner false si calibraste y hacia arriba.
+filter:
+  type: butterworth        # butterworth | savgol
+  order: 2
+  cutoff_hz: null          # null = análisis de residuos (Winter) por marcador
+  cutoff_range_hz: [4, 20]
+  fallback_cutoff_hz: 10.0
+qc:
+  duplicate_time_policy: first   # first | last | mean
+  jump_z: 8.0
+  jump_min_rel: 0.02
+  max_gap_s: 0.05
+
+# La cinemática lineal lateral no trae sufijo _cm: confirmar unidad real antes de usar velocidades lineales.
+coord_unit_overrides:
+  lateral/cinematica_lineal_lateral.csv: cm
+
+groups:
+  lateral_pierna:
+    files: [lateral/cinematica_lineal_lateral.csv]
+    segments: {muslo: [cadera, rodilla], pierna: [rodilla, tobillo]}
+    joints: {rodilla: [cadera, rodilla, tobillo]}
+    linear: [cadera, rodilla, tobillo]
+    angle_cols: []
+  lateral_rodilla:
+    files: [lateral/cinematica_angular_lateral_rodilla.csv, lateral/PI1_tiempo_angulo_abs_rodilla.csv]
+    angle_cols: auto
+  lateral_tobillo:
+    files: [lateral/cinematica_angular_lateral_tobillo.csv, lateral/PI1_tiempo_angulo_abs_tobillo.csv]
+    angle_cols: auto
+  posterior_brazo:
+    files: [posterior/cinematica_lineal_brazo_pos.csv]
+    segments: {brazo: [hombro, codo], antebrazo: [codo, muneca]}
+    joints: {codo: [hombro, codo, muneca]}
+    linear: [hombro, codo, muneca]
+    angle_cols: []
+  posterior_pierna:
+    files: [posterior/cinematica_posterior_PD.xlsx.csv]
+    segments: {muslo: [cadera, rodilla], pierna: [rodilla, tobillo], pie: [tobillo, punta]}
+    joints: {rodilla: [cadera, rodilla, tobillo], tobillo: [rodilla, tobillo, punta]}
+    linear: [punta, tobillo, rodilla, cadera]
+    angle_cols: []
+  posterior_angulos:
+    files: [posterior/cinematica_angular_rodilla.csv, posterior/cinematica_angular_tobillo.csv,
+            posterior/cinematica_angular_brazo.csv]
+    angle_cols: auto
+
+# NOTA: cinematica_lineal_brazo_v_a.csv no se usa: sus v/a se recalculan desde posiciones.
+# NOTA: posterior/cinematica_angular_rodilla.csv (fuera de data/) es duplicado y lo excluye M1 por hash.

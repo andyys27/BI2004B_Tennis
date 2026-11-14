@@ -1,0 +1,7 @@
+.env
+saque.egg-info
+__pycache__
+bdist.linux-x86_64
+data/interim
+data/processed
+reports/

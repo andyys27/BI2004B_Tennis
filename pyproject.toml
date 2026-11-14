@@ -1,0 +1,13 @@
+[project]
+name = "saque"
+version = "0.1.0"
+description = "Pipeline cinemático 2D del saque kick (M1-M6)"
+requires-python = ">=3.10"
+dependencies = ["numpy", "pandas", "scipy", "matplotlib", "pyyaml", "pytest"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "."]
+testpaths = ["tests"]

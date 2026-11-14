@@ -1,0 +1,11 @@
+# Convención: t_global = t_raw + offset_s.
+# offset_s = valor VERIFICADO con el video. hypothesis_s = estimación por duración/xcorr, NO verificada.
+# Mientras offset_s sea null, el grupo se omite salvo que se corra con --use-hypothesis.
+posterior/cinematica_angular_tobillo.csv:
+  offset_s: null
+  hypothesis_s: 0.592        # tobillo 0.000-2.340 s vs rodilla/codo 0.593-2.931 s
+  evidencia: "pendiente: marcar fotograma de un evento común en el video"
+lateral/PI1_tiempo_angulo_abs_tobillo.csv:
+  offset_s: null
+  hypothesis_s: -0.100       # 2.638-3.778 vs 2.538-3.678 s (se alinea PI1 al archivo angular)
+  evidencia: "pendiente: confirmar cuál de los dos tiene el origen correcto"
