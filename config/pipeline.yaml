@@ -34,6 +34,7 @@ groups:
     segments: {brazo: [hombro, codo], antebrazo: [codo, muneca]}
     joints: {codo: [hombro, codo, muneca]}
     linear: [hombro, codo, muneca]
+    jacobian: {upper: brazo, fore: antebrazo, shoulder: hombro, elbow: codo, wrist: muneca}
     angle_cols: []
   posterior_pierna:
     files: [posterior/cinematica_posterior_PD.xlsx.csv]
@@ -48,3 +49,47 @@ groups:
 
 # NOTA: cinematica_lineal_brazo_v_a.csv no se usa: sus v/a se recalculan desde posiciones.
 # NOTA: posterior/cinematica_angular_rodilla.csv (fuera de data/) es duplicado y lo excluye M1 por hash.
+
+# ---- M7: eventos y secuencia ----
+events:
+  shared_clock_verified: false      # pasar a true SOLO tras sincronizar brazo y pierna con un evento común
+  manual: {}                        # ej: {impacto: 1.532}  (fotograma de contacto marcado en el video)
+  series:
+    wrist_speed: {group: posterior_brazo,  column: speed_muneca}
+    elbow_angle: {group: posterior_brazo,  column: theta_interior_codo}
+    elbow_omega: {group: posterior_brazo,  column: omega_interior_codo}
+    knee_angle:  {group: posterior_pierna, column: theta_interior_rodilla}
+  sequence:
+    margin_s: 0.05
+    order: [muslo, brazo, codo, muneca]       # cadena disponible hoy: faltan tronco y hombro
+    series:
+      muslo:  {group: posterior_pierna, column: omega_seg_muslo}
+      brazo:  {group: posterior_brazo,  column: omega_seg_brazo}
+      codo:   {group: posterior_brazo,  column: omega_interior_codo}
+      muneca: {group: posterior_brazo,  column: speed_muneca}
+
+# ---- M10: estadísticas descriptivas y consistencia ----
+statistics:
+  series:
+    flexion_rodilla: {group: posterior_pierna, column: theta_interior_rodilla}
+    omega_muslo: {group: posterior_pierna, column: omega_seg_muslo}
+    omega_codo: {group: posterior_brazo, column: omega_interior_codo}
+    rapidez_muneca: {group: posterior_brazo, column: speed_muneca}
+
+# ---- M12: dinámica inversa (desactivada hasta verificar GRF y reloj común) ----
+inverse_dynamics:
+  enabled: false
+  shared_clock_verified: false
+  file: grf/grf.csv
+  kinematics_group: posterior_pierna
+  contact_threshold_n: 20.0
+  columns:
+    time: time_s
+    force_x: GRF_x
+    force_z: vGRF
+    cop_x: cop_x_from_ankle_m
+    cop_z: cop_z_from_ankle_m
+  anthropometry:
+    height_m: 1.64
+    body_mass_kg: 58.0
+    foot_length_m: 0.25

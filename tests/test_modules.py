@@ -209,7 +209,7 @@ def test_pipeline_end_to_end(raw, tmp_path):
     # con hipótesis: se procesa y queda marcado
     r2 = run(raw, cfg, off, tmp_path / "o2", use_hypothesis=True)
     assert "posterior_angulos" in r2["results"]
-    dec = pd.read_csv(tmp_path / "o2/reports/tables/decisiones_sync.csv")
+    dec = pd.read_csv(tmp_path / "o2/reports/tables/synchronization/decisiones_sync.csv")
     assert dec["estado"].eq("HIPOTESIS_NO_VERIFICADA").any()
     # brazo: ω del segmento recuperada frente a la verdad analítica
     k = r["results"]["posterior_brazo"]

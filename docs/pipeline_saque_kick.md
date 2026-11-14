@@ -41,8 +41,13 @@ saque_kick/
 │   ├── raw/                      # CSV originales de Kinovea (NUNCA se editan)
 │   │   ├── lateral/
 │   │   └── posterior/
-│   ├── interim/                  # series estandarizadas (time_s, SI)
-│   └── processed/                # series filtradas, ángulos, eventos, features
+│   ├── interim/
+│   │   └── synchronized/         # series estandarizadas y alineadas (time_s)
+│   └── processed/
+│       ├── filtered/             # coordenadas/ángulos después del filtro
+│       ├── kinematics/           # θ, ω, α y cinemática lineal
+│       ├── jacobian/             # velocidad de mano por J(θ)ω
+│       └── inverse_dynamics/     # fuerzas y momentos; requiere GRF sincronizada
 ├── src/saque/
 │   ├── __init__.py
 │   ├── config.py                 # carga de YAML y dataclasses
@@ -54,8 +59,8 @@ saque_kick/
 │   ├── kinematics.py             # [M6] ángulos, velocidades, aceleraciones
 │   ├── events.py                 # [M7] eventos y fases
 │   ├── jacobian.py               # [M8] v = J(θ)ω
-│   │   ├── stats.py                  # [M10] variabilidad, correlaciones, bootstrap
-│   ├── ml.py                     # [M11] módulo extra de ML
+│   ├── stats.py                  # [M10] variabilidad, correlaciones, bootstrap
+│   ├── ml.py                     # [M11] módulo extra de ML (no implementado)
 │   ├── inverse_dynamics.py       # [M12] Newton-Euler (listo para GRF)
 │   ├── viz.py                    # [M13] gráficas
 │   └── report.py                 # [M14] tablas y reporte final
@@ -72,6 +77,15 @@ saque_kick/
 └── reports/
     ├── figures/
     └── tables/
+        ├── catalog/
+        ├── events/
+        ├── filtering/
+        ├── inverse_dynamics/
+        ├── jacobian/
+        ├── qc/
+        ├── report/
+        ├── statistics/
+        └── synchronization/
 ```
 
 **Regla de oro:** `data/raw` es de solo lectura. Todo lo demás se regenera corriendo `run_pipeline.py`.
@@ -149,7 +163,7 @@ def build_catalog(root: Path) -> pd.DataFrame:
     return cat
 ```
 
-**Salida:** `reports/tables/catalogo.csv`. Los duplicados se excluyen del procesamiento.
+**Salida:** `reports/tables/catalog/catalogo.csv`. Los duplicados se excluyen del procesamiento.
 
 ---
 
@@ -523,6 +537,12 @@ def boot_ci(x, y, n_boot=5000, alpha=0.05, rng=np.random.default_rng(0)):
 
 **Formalizar hipótesis (antes de inferir):** H0 estadística = “no hay asociación entre el índice de transferencia próximo-distal y la velocidad pico de la mano/muñeca”; H1 = “sí hay asociación”. Las H0/H1 direccionales del contexto del proyecto son hipótesis de trabajo, no nula/alternativa estadística.
 
+La implementación actual escribe `reports/tables/statistics/descriptivos_por_fase.csv`,
+`curvas_normalizadas.csv` y `variabilidad_interintento.csv`. Los CSV disponibles no
+identifican intentos repetidos de forma independiente, por lo que el pipeline reporta
+descriptivos por serie y no presenta CV inter-intento ni asociaciones como estimables
+hasta que se incorporen IDs de intento y varias repeticiones.
+
 ---
 
 ### M11 · `ml.py` — Módulo extra (ML) 🔥
@@ -597,62 +617,44 @@ Centros de masa desde proximal (Winter): pie 0.50 l, pierna 0.433 l, muslo 0.433
 
 > Esos valores deben **verificarse con la tabla original** de Winter y con la tenista real; los parámetros no se generalizan entre participantes.
 
-#### 12.2 Ecuaciones implementadas
+#### 12.2 Modelo implementado
 
-Aceleraciones del CM (nivel 2, pierna):
+El módulo usa la forma vectorial de Newton–Euler, calculando el centro de masa y su
+aceleración para pie, pierna y muslo, y resolviendo fuerzas y momentos de distal a
+proximal. Las fuerzas y momentos de acción-reacción se transmiten entre segmentos.
+Los ángulos absolutos se miden desde el eje x positivo, con z vertical hacia arriba;
+el momento positivo es antihorario.
 
-$$
-\ddot x_2=-r_1(\cos\theta_1\,\omega_1^2+\sin\theta_1\,\alpha_1)-r_2(\cos\theta_2\,\omega_2^2+\sin\theta_2\,\alpha_2)
-$$
+La fuerza de plataforma actúa en el centro de presión. Por ello, M12 requiere que el
+CSV de GRF contenga tiempo en segundos, `GRF_x` y `vGRF` en N y el vector
+`(cop_x_from_ankle_m, cop_z_from_ankle_m)` en metros. También requiere aceleración
+del tobillo y series angulares procesadas. Las series se interpolan únicamente en su
+intervalo temporal común; no se extrapola.
 
-$$
-\ddot z_2=-r_1(\sin\theta_1\,\omega_1^2-\cos\theta_1\,\alpha_1)-r_2(\sin\theta_2\,\omega_2^2-\cos\theta_2\,\alpha_2)
-$$
+La detección de contacto usa `vGRF > contact_threshold_n`; durante el vuelo se
+anulan las fuerzas de plataforma, pero **las fuerzas internas del tobillo no se fijan
+a cero**, pues el módulo incluye la masa y dinámica del pie. Sin GRF habilitada y
+sincronizada no se emiten torques: se guarda el estado de omisión en
+`reports/tables/inverse_dynamics/status.csv`. El archivo de GRF se resuelve respecto a
+`--raw`; los parámetros antropométricos configurados son valores iniciales que deben
+validarse con cada participante.
 
-Fuerzas y torque de rodilla:
-
-$$
-F_{x2}=F_{x1}-m_2\ddot x_2,\qquad
-F_{z2}=F_{z1}-m_2 g-m_2\ddot z_2
-$$
-
-Cadera: análogo con `ẍ₃, z̈₃` y `T₃` según el documento.
-
-**Fase aérea:** si `vGRF ≤ umbral`, `GRF = 0` y `F₁ = T₁ = 0`.
+El código no implementa literalmente las fórmulas cerradas de
+`contexto_dinamica_inversa.md`: estas se conservan como formulación preliminar y deben
+compararse con el modelo vectorial antes de interpretarlas como resultados equivalentes.
 
 #### 12.3 Riesgos conocidos (revisar antes de usarlo)
 
-1. El documento fue planteado para un **brinco** (fase de apoyo + vuelo). Su aplicabilidad al **saque kick** (impulso con ambos pies, rotación de tronco, apoyo parcial) debe justificarse.
-2. Los **signos** en `T₂` y `T₃` (p. ej. `l₁cosθ₁ − l₂cosθ₂ + r₃cosθ₃`) dependen de la convención de ángulos: algunos términos mezclan ángulos absolutos con direcciones que podrían requerir `+`. **No confiar sin verificación.**
-3. Despreciar la masa del pie en apoyo es una simplificación.
+1. El modelo inicial fue planteado para un **brinco**. Su aplicación al **saque kick** debe justificarse: la configuración actual representa una sola cadena y un único contacto; no modela explícitamente apoyo bilateral, pelvis ni tronco.
+2. Los parámetros antropométricos de Winter y las longitudes segmentarias deben verificarse para cada participante.
+3. La sincronización entre GRF, video y centro de presión debe validarse; un archivo temporalmente alineado de forma incorrecta produce fuerzas/torques engañosos.
 4. El modelo cierra en cadera sin tronco → no sirve para cargas de columna, hombro o codo.
 
 #### 12.4 Cómo validarlo sin GRF (tests)
 
-- **Test estático:** segmentos quietos con `GRF` = peso total → torques deben coincidir con el cálculo estático de brazos de palanca.
-- **Test de caída libre:** `GRF = 0`, sin movimiento relativo → fuerzas articulares ≈ 0 y torques ≈ 0.
-- **Verificación cruzada:** implementar una segunda versión **genérica** de Newton-Euler a partir de coordenadas de CM y ángulos (sin las fórmulas cerradas) y comparar. Si las dos discrepan, hay un error de signo en la forma cerrada.
-
-```python
-def inverse_dynamics(th, w, al, grf_x, vgrf, p, thr=20.0):
-    contact = vgrf > thr
-    gx = np.where(contact, grf_x, 0.0); gz = np.where(contact, vgrf, 0.0)
-    th1, th2, th3 = th; w1, w2, w3 = w; a1, a2, a3 = al
-    Fx1, Fz1 = gx, gz
-    T1 = np.where(contact, gx*p.l1 - gz*p.h, 0.0)
-    ax2 = -p.r1*(np.cos(th1)*w1**2 + np.sin(th1)*a1) \
-          -p.r2*(np.cos(th2)*w2**2 + np.sin(th2)*a2)
-    az2 = -p.r1*(np.sin(th1)*w1**2 - np.cos(th1)*a1) \
-          -p.r2*(np.sin(th2)*w2**2 - np.cos(th2)*a2)
-    Fx2 = Fx1 - p.m2*ax2
-    Fz2 = Fz1 - p.m2*p.g - p.m2*az2
-    T2 = (T1 + Fx1*p.r1*np.cos(th1) + Fz1*p.r1*np.sin(th1)
-          - Fz2*p.d2*np.sin(th1) + Fx2*p.d2*np.cos(th1) - p.I2*a2)
-    # ... nivel 3 (cadera) análogo
-    return dict(Fx1=Fx1, Fz1=Fz1, T1=T1, Fx2=Fx2, Fz2=Fz2, T2=T2)
-```
-
-> Nótese que en el documento original `T₂` usa `sinθ₁`/`cosθ₁` en los términos de `d₂`; **probablemente deberían ser θ₂** (el brazo de palanca de `d₂` pertenece al segmento 2). Este es justo el tipo de detalle que el test cruzado de §12.4 debe detectar. Dejarlo anotado como pendiente en vez de asumir correcto.
+- **Caída libre:** aceleración de tobillo igual a la gravedad, orientación constante y `GRF = 0` → fuerzas y momentos internos nulos.
+- **Equilibrio estático simple:** segmentos verticales, sin aceleración y una fuerza vertical bajo el tobillo → momentos articulares nulos; la reacción se propaga según las masas segmentarias.
+- El signo de las salidas se fija por el convenio de fuerzas/momentos sobre el segmento; antes de usar GRF real aún falta comparar con una segunda implementación independiente o una medición de referencia.
 
 ---
 
@@ -677,6 +679,10 @@ def inverse_dynamics(th, w, al, grf_x, vgrf, p, thr=20.0):
 | G15 | (Futuro) Torques T₁, T₂, T₃ y GRF vs tiempo | Dinámica inversa | Picos de carga antes/después del despegue |
 
 Estilo: ejes con unidades, leyenda clara, misma escala entre intentos, eventos como líneas verticales.
+
+La implementación genera las figuras que tengan entradas disponibles en
+`reports/figures/`: cobertura temporal, intervalos de muestreo, cinemática por grupo,
+fases, validación/contribuciones del Jacobiano y trayectoria de muñeca.
 
 ```python
 import matplotlib.pyplot as plt
@@ -705,26 +711,25 @@ Genera automáticamente:
 - `tabla_validacion.csv`: RMSE de ángulos recalculados vs Kinovea, Jacobiano vs directa, sensibilidad al filtro.
 - `log_decisiones.md`: todo offset, dato excluido, filtro y parámetro usado.
 
+La implementación escribe `reports/report.md`, `reports/log_decisiones.md` y
+`reports/tables/report/metricas_validacion.csv`, incorporando advertencias y estado de
+M12 para que las limitaciones queden visibles.
+
 ---
 
 ## 4. Orden de ejecución (`scripts/run_pipeline.py`)
 
-```python
-def main():
-    cfg = load_config()
-    cat = build_catalog(RAW)                    # M1 (excluye duplicados)
-    data = {f: read_kinovea(f) for f in valid_files(cat)}   # M2
-    data = qc_all(data)                         # M3
-    data = sync_all(data, cfg.offsets)          # M4 → malla común, solo intervalo común
-    data = filter_all(data, cfg.filter)         # M5
-    kin  = compute_kinematics(data)             # M6
-    ev   = detect_all_events(kin)               # M7
-    jac  = hand_velocity_validation(kin)        # M8
-    st   = summarize(kin, ev)                   # M10
-    ml   = run_ml(kin, ev)                      # M11 (exploratorio)
-    # inverse_dynamics solo si existe data/raw/grf/*.csv  # M12
-    make_figures(...); write_report(...)        # M13-M14
-```
+Al ejecutar `python scripts/run_pipeline.py --raw data/raw`, el punto de entrada corre M1–M6, M7 y M8 (para los grupos que declaran `jacobian`, actualmente `posterior_brazo`), y luego M10, M12, M13 y M14. M12 solo calcula fuerzas si tiene una entrada GRF y reloj compartido verificado. Las salidas relevantes son:
+
+- M7: `reports/tables/events/` (`eventos.csv`, `fases.csv`, `picos_secuencia.csv`, `secuencia.csv`).
+- M8: `data/processed/jacobian/<grupo>_jacobian.csv` y `reports/tables/jacobian/validacion.csv`.
+- M10: `reports/tables/statistics/` (descriptivos por fase, curvas normalizadas y estado de variabilidad).
+- M12: `data/processed/inverse_dynamics/` si se ejecuta; en caso contrario, se guarda el motivo en `reports/tables/inverse_dynamics/status.csv`.
+- M13: figuras bajo `reports/figures/`; M14: `reports/report.md`, `reports/log_decisiones.md` y tabla consolidada.
+
+Las salidas intermedias y procesadas se separan por procedimiento: sincronización en `data/interim/synchronized/`; filtrado, cinemática y Jacobiano en sus respectivas carpetas bajo `data/processed/`. Los reportes tabulares también se agrupan por procedimiento.
+
+M9 (pelota) está marcado como descartado y M11 no está implementado. M7/M10 advierten si la sincronización entre grupos no está verificada; sus comparaciones entre vistas/grupos deben considerarse exploratorias.
 
 ---
 

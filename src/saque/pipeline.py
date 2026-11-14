@@ -11,6 +11,8 @@ from .qc import QCLog, clean_time, fill_short_gaps, mask_outliers, time_report
 from .sync import apply_offset, merge_on_grid
 from .filtering import butter_lp, savgol, winter_cutoff
 from .kinematics import compute_kinematics
+from .jacobian import jacobian_from_kinematics
+from .events import detect_events, phase_table, peak_times, sequence_metrics
 
 
 def _auto_angle_cols(df: pd.DataFrame) -> list[str]:
@@ -37,19 +39,31 @@ def run(raw_dir="data/raw", config="config/pipeline.yaml", offsets="config/sync_
     cfg = load_config(config)
     off_cfg = load_yaml(offsets)
     raw_dir, out = Path(raw_dir), Path(out_dir)
-    (out / "data/interim").mkdir(parents=True, exist_ok=True)
-    (out / "data/processed").mkdir(parents=True, exist_ok=True)
-    (out / "reports/tables").mkdir(parents=True, exist_ok=True)
+    interim_dir = out / "data/interim/synchronized"
+    filtered_dir = out / "data/processed/filtered"
+    kinematics_dir = out / "data/processed/kinematics"
+    jacobian_dir = out / "data/processed/jacobian"
+    for directory in (interim_dir, filtered_dir, kinematics_dir, jacobian_dir):
+        directory.mkdir(parents=True, exist_ok=True)
+    table_dirs = {
+        "catalog": out / "reports/tables/catalog",
+        "qc": out / "reports/tables/qc",
+        "synchronization": out / "reports/tables/synchronization",
+        "filtering": out / "reports/tables/filtering",
+        "jacobian": out / "reports/tables/jacobian",
+    }
+    for directory in table_dirs.values():
+        directory.mkdir(parents=True, exist_ok=True)
     fs, log = float(cfg["resample_hz"]), QCLog()
 
     # M1
     cat = build_catalog(raw_dir)
-    cat.drop(columns="columnas").to_csv(out / "reports/tables/catalogo.csv", index=False)
+    cat.drop(columns="columnas").to_csv(table_dirs["catalog"] / "catalogo.csv", index=False)
     usable = set(valid_files(cat))
     for _, r in cat[~cat["usar"]].iterrows():
         log.add(r["archivo"], "archivo_duplicado", f"excluido (idéntico a {r['duplicado_de']})")
 
-    decisions, filt_rows, time_rows, results = [], [], [], {}
+    decisions, filt_rows, time_rows, results, jac_rows = [], [], [], {}, []
     for gname, g in cfg["groups"].items():
         files = g["files"]
         missing = [f for f in files if f not in usable]
@@ -86,7 +100,7 @@ def run(raw_dir="data/raw", config="config/pipeline.yaml", offsets="config/sync_
                                            if v.attrs.get("coord_unit")), None)
         decisions.append(dict(grupo=gname, archivo="(intervalo común)", offset_s=None,
                               estado=f"{info['t0']:.3f}-{info['t1']:.3f} s, n={info['n']}"))
-        merged.to_csv(out / f"data/interim/{gname}_merged.csv", index=False)
+        merged.to_csv(interim_dir / f"{gname}_merged.csv", index=False)
 
         # M5: filtrado (coordenadas por marcador; ángulos por columna)
         filt = merged.copy()
@@ -110,16 +124,61 @@ def run(raw_dir="data/raw", config="config/pipeline.yaml", offsets="config/sync_
             tmp = []
             filt[c] = _filter_series(np.unwrap(merged[c].to_numpy()), fs, cfg["filter"], c, tmp)
             filt_rows += [dict(grupo=gname, **t) for t in tmp]
-        filt.to_csv(out / f"data/processed/{gname}_filtered.csv", index=False)
+        filt.to_csv(filtered_dir / f"{gname}_filtered.csv", index=False)
 
         # M6: cinemática
         kin = compute_kinematics(filt, fs, g.get("segments"), g.get("joints"), g.get("linear"),
                                  angle_cols, cfg["flip_y"])
-        kin.to_csv(out / f"data/processed/{gname}_kinematics.csv", index=False)
+        kin.to_csv(kinematics_dir / f"{gname}_kinematics.csv", index=False)
         results[gname] = kin
 
-    log.to_df().to_csv(out / "reports/tables/qc_log.csv", index=False)
-    pd.DataFrame(time_rows).to_csv(out / "reports/tables/time_report.csv", index=False)
-    pd.DataFrame(filt_rows).to_csv(out / "reports/tables/filtros.csv", index=False)
-    pd.DataFrame(decisions).to_csv(out / "reports/tables/decisiones_sync.csv", index=False)
-    return dict(results=results, log=log.to_df(), catalog=cat)
+        # M8: Jacobiano (si el grupo lo declara)
+        if g.get("jacobian"):
+            jt, met = jacobian_from_kinematics(kin, filt, **g["jacobian"])
+            jt.to_csv(jacobian_dir / f"{gname}_jacobian.csv", index=False)
+            jac_rows.append(dict(grupo=gname, **met))
+
+    log.to_df().to_csv(table_dirs["qc"] / "qc_log.csv", index=False)
+    pd.DataFrame(time_rows).to_csv(table_dirs["qc"] / "time_report.csv", index=False)
+    pd.DataFrame(filt_rows).to_csv(table_dirs["filtering"] / "filtros.csv", index=False)
+    pd.DataFrame(decisions).to_csv(table_dirs["synchronization"] / "decisiones_sync.csv", index=False)
+    pd.DataFrame(jac_rows).to_csv(table_dirs["jacobian"] / "validacion.csv", index=False)
+    return dict(results=results, log=log.to_df(), catalog=cat, jacobian=pd.DataFrame(jac_rows))
+
+
+def _load_series(out: Path, spec: dict):
+    f = out / f"data/processed/kinematics/{spec['group']}_kinematics.csv"
+    if not f.exists():
+        return None
+    d = pd.read_csv(f)
+    return (d["time_s"].to_numpy(), d[spec["column"]].to_numpy()) if spec["column"] in d else None
+
+
+def run_events(out_dir=".", config="config/pipeline.yaml") -> dict:
+    """M7: eventos, fases y secuencia próximo-distal a partir de las series cinemáticas."""
+    cfg, out = load_config(config), Path(out_dir)
+    ecfg = cfg.get("events") or {}
+    series = {k: _load_series(out, v) for k, v in (ecfg.get("series") or {}).items()}
+    series = {k: v for k, v in series.items() if v is not None}
+    if "wrist_speed" not in series:
+        raise RuntimeError("M7 requiere la serie 'wrist_speed' (M6 del grupo del brazo).")
+    ev = detect_events(series, manual=ecfg.get("manual"))
+    warns = list(ev.pop("_warnings"))
+    if not ecfg.get("shared_clock_verified", False):
+        warns.append("RELOJ COMPARTIDO NO VERIFICADO: eventos entre grupos distintos son exploratorios")
+    ev_df = pd.DataFrame([dict(evento=k, **v) for k, v in ev.items()])
+    ph = phase_table(ev)
+    seq_series = {lab: _load_series(out, spec) for lab, spec in (ecfg.get("sequence") or {}).get("series", {}).items()}
+    seq_series = {k: v for k, v in seq_series.items() if v is not None}
+    win = (ev["inicio"]["t"], ev["impacto"]["t"] + float((ecfg.get("sequence") or {}).get("margin_s", 0.05)))
+    peaks = peak_times(seq_series, win)
+    sm = sequence_metrics(peaks, list((ecfg.get("sequence") or {}).get("order", [])))
+    table_dir = out / "reports/tables/events"
+    table_dir.mkdir(parents=True, exist_ok=True)
+    ev_df.to_csv(table_dir / "eventos.csv", index=False)
+    ph.to_csv(table_dir / "fases.csv", index=False)
+    pd.DataFrame([dict(serie=k, **v) for k, v in peaks.items()]).to_csv(table_dir / "picos_secuencia.csv", index=False)
+    pd.DataFrame([dict(par=f"{a}→{b}", lag_ms=l) for a, b, l in
+                  zip(sm["labels"][:-1], sm["labels"][1:], sm["lags_ms"])]
+                 ).assign(tau=sm["tau"], nota=sm["nota"]).to_csv(table_dir / "secuencia.csv", index=False)
+    return dict(events=ev_df, phases=ph, peaks=peaks, sequence=sm, warnings=warns)

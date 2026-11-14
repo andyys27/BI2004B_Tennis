@@ -2,6 +2,8 @@
 
 Este documento describe la metodología analítica y computacional empleada para determinar las fuerzas internas y los torques articulares en la extremidad inferior (tobillo, rodilla y cadera) durante una maniobra dinámica con fase de contacto y fase aérea (brinco), utilizando un enfoque de **Dinámica Inversa en 2D (plano sagital)**.
 
+> **Estado del modelo:** las ecuaciones cerradas de este documento son la formulación inicial y no deben confundirse con la implementación actual de M12. El módulo [`inverse_dynamics.py`](../src/saque/inverse_dynamics.py) usa balances vectoriales de Newton-Euler por segmento, incorpora la masa del pie y requiere GRF, centro de presión y aceleración del tobillo sincronizados. La equivalencia de ambas formulaciones todavía debe validarse antes de interpretar torques con datos reales.
+
 ---
 
 ## 1. Fundamento del Proyecto
