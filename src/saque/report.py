@@ -23,6 +23,7 @@ def run_report(out_dir=".", *, warnings=None) -> dict:
     stats = _read_optional(tables / "statistics/descriptivos_por_fase.csv")
     jacobian = _read_optional(tables / "jacobian/validacion.csv")
     inverse_status = _read_optional(tables / "inverse_dynamics/status.csv")
+    upper_inverse_status = _read_optional(tables / "inverse_dynamics/upper_limb_status.csv")
     sync = _read_optional(tables / "synchronization/decisiones_sync.csv")
     qc = _read_optional(tables / "qc/qc_log.csv")
     filters = _read_optional(tables / "filtering/filtros.csv")
@@ -35,6 +36,10 @@ def run_report(out_dir=".", *, warnings=None) -> dict:
                                         "valor": row[key], "grupo": row.get("grupo", "")})
     for _, row in inverse_status.iterrows():
         validation_rows.append({"procedimiento": "M12_dinamica_inversa",
+                                "metrica": row.get("status", "estado"),
+                                "valor": row.get("message", "")})
+    for _, row in upper_inverse_status.iterrows():
+        validation_rows.append({"procedimiento": "M12_dinamica_inversa_tren_superior",
                                 "metrica": row.get("status", "estado"),
                                 "valor": row.get("message", "")})
     validation = pd.DataFrame(validation_rows, columns=["procedimiento", "metrica", "valor", "grupo"])
@@ -75,6 +80,29 @@ def run_report(out_dir=".", *, warnings=None) -> dict:
         for _, row in inverse_status.iterrows():
             summary.append(f"- Dinámica inversa (M12): **{row.get('status', 'sin estado')}** — "
                            f"{row.get('message', '')}")
+    for _, row in upper_inverse_status.iterrows():
+        summary.append(f"- Dinámica inversa M12 (tren superior): **{row.get('status', 'sin estado')}** — "
+                       f"{row.get('message', '')}")
+    interpretation_notes = []
+    if (not inverse_status.empty
+            and (inverse_status["status"] == "completed_assumed_flight").any()):
+        interpretation_notes.append(
+            "La extremidad inferior se calculó suponiendo GRF=0 y fase aérea durante todo "
+            "el registro; sus fuerzas/torques no representan las cargas reales durante el apoyo."
+        )
+    if (not upper_inverse_status.empty
+            and (upper_inverse_status["status"] == "completed_assumed_zero_wrist_force").any()):
+        interpretation_notes.append(
+            "El tren superior supone fuerza externa nula en muñeca y excluye mano, raqueta "
+            "y pelota; no representa las cargas reales del saque."
+        )
+    if interpretation_notes:
+        interpretation = " ".join(interpretation_notes) + " Los parámetros antropométricos también requieren validación."
+    else:
+        interpretation = (
+            "Las fuerzas y torques de M12 solo se interpretan con las cargas externas "
+            "relevantes medidas y parámetros antropométricos verificados."
+        )
     summary += [
         "",
         "## Tablas y figuras",
@@ -88,9 +116,8 @@ def run_report(out_dir=".", *, warnings=None) -> dict:
         "",
         "## Interpretación",
         "Las asociaciones y comparaciones entre intentos son exploratorias. No se "
-        "atribuyen causalidad ni riesgo de lesión a partir de cinemática 2D. Las fuerzas "
-        "y torques solo se reportan si hay GRF sincronizada y parámetros antropométricos "
-        "verificados para el participante.",
+        "atribuyen causalidad ni riesgo de lesión a partir de cinemática 2D. "
+        + interpretation,
     ]
     if warnings:
         summary += ["", "## Advertencias del pipeline", *[f"- {warning}" for warning in warnings]]

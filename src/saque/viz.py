@@ -162,6 +162,68 @@ def plot_wrist_trajectory(filtered: pd.DataFrame, kin: pd.DataFrame, path: Path,
     return True
 
 
+def _inverse_dynamics_note(data: pd.DataFrame) -> str:
+    if "external_force_mode" not in data:
+        return ""
+    modes = data["external_force_mode"].dropna().unique()
+    return str(modes[0]) if len(modes) == 1 else "Modo de fuerza externo variable"
+
+
+def _plot_inverse_dynamics(data: pd.DataFrame, path: Path, quantity: str) -> bool:
+    if "T_ankle_Nm" in data:
+        joints = {"ankle": "Tobillo", "knee": "Rodilla", "hip": "Cadera"}
+    elif "T_shoulder_Nm" in data:
+        joints = {"shoulder": "Hombro", "elbow": "Codo"}
+    else:
+        return False
+    if "time_s" not in data:
+        return False
+    columns = ([f"T_{joint}_Nm" for joint in joints]
+               if quantity == "moments"
+               else [f"{axis}_{joint}_N" for joint in joints for axis in ("Fx", "Fz")])
+    if not set(columns).issubset(data.columns):
+        return False
+    time_s = data["time_s"].to_numpy(float)
+    if not np.isfinite(time_s).all() or np.any(np.diff(time_s) <= 0):
+        raise ValueError("M13: el tiempo de dinámica inversa debe ser finito y creciente")
+    if not np.isfinite(data[columns].to_numpy(float)).all():
+        raise ValueError("M13: las fuerzas/torques de dinámica inversa contienen valores no finitos")
+
+    fig, axes = plt.subplots(3, 1, sharex=True, figsize=(9, 8))
+    for ax, (joint, label) in zip(axes, joints.items()):
+        if quantity == "moments":
+            ax.plot(time_s, data[f"T_{joint}_Nm"], color="#C00000", label="Momento neto")
+            ax.axhline(0, color="black", linewidth=0.7)
+            ax.set_ylabel("N·m")
+        else:
+            ax.plot(time_s, data[f"Fx_{joint}_N"], label="Fx")
+            ax.plot(time_s, data[f"Fz_{joint}_N"], label="Fz")
+            ax.axhline(0, color="black", linewidth=0.7)
+            ax.set_ylabel("N")
+            ax.legend(loc="best")
+        ax.set_title(label, loc="left", fontsize="medium")
+        ax.grid(alpha=0.25)
+    axes[-1].set_xlabel("Tiempo (s)")
+    title = ("Momentos articulares netos" if quantity == "moments"
+             else "Fuerzas de reacción articulares")
+    note = _inverse_dynamics_note(data)
+    if note:
+        title += f"\nSupuesto: {note}"
+    fig.suptitle(title)
+    _save(fig, path)
+    return True
+
+
+def plot_inverse_dynamics_moments(data: pd.DataFrame, path: Path) -> bool:
+    """Grafica momentos articulares netos del tobillo, rodilla y cadera."""
+    return _plot_inverse_dynamics(data, path, "moments")
+
+
+def plot_inverse_dynamics_forces(data: pd.DataFrame, path: Path) -> bool:
+    """Grafica componentes de las fuerzas de reacción articulares."""
+    return _plot_inverse_dynamics(data, path, "forces")
+
+
 def run_visualizations(out_dir=".", config=None) -> dict:
     """Genera las figuras posibles con los datos actuales e informa las faltantes."""
     out = Path(out_dir)
@@ -210,6 +272,22 @@ def run_visualizations(out_dir=".", config=None) -> dict:
         dest = figures / "trajectory/wrist.png"
         if plot_wrist_trajectory(pd.read_csv(arm_filtered), pd.read_csv(arm_kin), dest, flip_y):
             generated.append(dest)
+
+    inverse_dir = out / "data/processed/inverse_dynamics"
+    for file in sorted(inverse_dir.glob("*_inverse_dynamics.csv")):
+        data = pd.read_csv(file)
+        plots = (
+            (plot_inverse_dynamics_moments, "joint_moments"),
+            (plot_inverse_dynamics_forces, "joint_reaction_forces"),
+        )
+        for plotter, suffix in plots:
+            dest = figures / "inverse_dynamics" / f"{file.stem}_{suffix}.png"
+            if plotter(data, dest):
+                generated.append(dest)
+            else:
+                warnings.append(
+                    f"M13 omitió la gráfica {suffix}: faltan columnas en {file}."
+                )
     if not list(kin_dir.glob("*_kinematics.csv")):
         warnings.append("M13 no encontró salidas cinemáticas para graficar.")
     return {"figures": generated, "warnings": warnings}

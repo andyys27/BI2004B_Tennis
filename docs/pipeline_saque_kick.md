@@ -20,7 +20,7 @@
 
 **No resuelve (hay que decirlo explícito en el reporte):**
 
-- Fuerzas y torques articulares reales: **no hay GRF** en los CSV. El módulo de dinámica inversa queda como "puerto" probado con datos sintéticos, no como resultado.
+- No hay GRF en los CSV. M12 puede ejecutarse con GRF=0 bajo la hipótesis explícita de que todo el registro corresponde a fase aérea; sus cargas no representan la fase de apoyo.
 - Causalidad ni riesgo de lesión. Con ~5 intentos todo lo estadístico es **exploratorio**.
 - 3D. Son dos vistas 2D sin calibración conjunta.
 - Pelota (velocidad, spin): fuera de alcance por decisión del proyecto.
@@ -603,7 +603,7 @@ Si `Q² ≤ 0`, el modelo no supera a la media: se reporta tal cual (resultado v
 
 ### M12 · `inverse_dynamics.py` — Dinámica inversa (Newton-Euler 2D)
 
-Implementa el modelo de `contexto_dinamica_inversa.md` como **módulo vectorizado** y testeado. **Hoy no se puede ejecutar con datos reales** (faltan `GRF_x`, `vGRF`).
+Implementa balances vectoriales de Newton-Euler por segmento como **módulo vectorizado** y testeado. Puede ejecutarse con GRF medida y sincronizada, o en el modo actual `assume_flight_no_grf`, que fija GRF=0 para todas las muestras y supone fase aérea.
 
 #### 12.1 Parámetros antropométricos (Winter), sujeto 1.64 m, 58 kg
 
@@ -625,19 +625,21 @@ proximal. Las fuerzas y momentos de acción-reacción se transmiten entre segmen
 Los ángulos absolutos se miden desde el eje x positivo, con z vertical hacia arriba;
 el momento positivo es antihorario.
 
-La fuerza de plataforma actúa en el centro de presión. Por ello, M12 requiere que el
-CSV de GRF contenga tiempo en segundos, `GRF_x` y `vGRF` en N y el vector
-`(cop_x_from_ankle_m, cop_z_from_ankle_m)` en metros. También requiere aceleración
-del tobillo y series angulares procesadas. Las series se interpolan únicamente en su
-intervalo temporal común; no se extrapola.
+En modo `measured_grf`, la fuerza de plataforma actúa en el centro de presión. El CSV
+debe contener tiempo en segundos, `GRF_x` y `vGRF` en N y el vector
+`(cop_x_from_ankle_m, cop_z_from_ankle_m)` en metros; se exige reloj compartido
+verificado y se interpola solo en el intervalo común, sin extrapolar. En el modo
+`assume_flight_no_grf` no se carga GRF ni CoP: se usa cero en todas las muestras y se
+procesa el registro cinemático completo.
 
-La detección de contacto usa `vGRF > contact_threshold_n`; durante el vuelo se
-anulan las fuerzas de plataforma, pero **las fuerzas internas del tobillo no se fijan
-a cero**, pues el módulo incluye la masa y dinámica del pie. Sin GRF habilitada y
-sincronizada no se emiten torques: se guarda el estado de omisión en
-`reports/tables/inverse_dynamics/status.csv`. El archivo de GRF se resuelve respecto a
-`--raw`; los parámetros antropométricos configurados son valores iniciales que deben
-validarse con cada participante.
+En el modo actual, los valores estimados solo pueden interpretarse bajo la hipótesis
+de vuelo y **no son cargas reales de la fase de apoyo**. El CSV incluye
+`external_force_mode` para identificarlo y el reporte advierte esta limitación. El
+estado queda en `reports/tables/inverse_dynamics/status.csv`. En el modo medido,
+contacto se detecta con `vGRF > contact_threshold_n`; durante el vuelo se anula la
+fuerza externa, pero las fuerzas internas del tobillo no se fijan a cero. Los
+parámetros antropométricos son valores iniciales y deben validarse para cada
+participante.
 
 El código no implementa literalmente las fórmulas cerradas de
 `contexto_dinamica_inversa.md`: estas se conservan como formulación preliminar y deben
@@ -649,6 +651,7 @@ compararse con el modelo vectorial antes de interpretarlas como resultados equiv
 2. Los parámetros antropométricos de Winter y las longitudes segmentarias deben verificarse para cada participante.
 3. La sincronización entre GRF, video y centro de presión debe validarse; un archivo temporalmente alineado de forma incorrecta produce fuerzas/torques engañosos.
 4. El modelo cierra en cadera sin tronco → no sirve para cargas de columna, hombro o codo.
+5. Sin GRF no se puede identificar si una muestra corresponde a apoyo o vuelo; el modo actual asume vuelo en todo el registro y no debe usarse para interpretar el saque durante el apoyo.
 
 #### 12.4 Cómo validarlo sin GRF (tests)
 
@@ -682,7 +685,11 @@ Estilo: ejes con unidades, leyenda clara, misma escala entre intentos, eventos c
 
 La implementación genera las figuras que tengan entradas disponibles en
 `reports/figures/`: cobertura temporal, intervalos de muestreo, cinemática por grupo,
-fases, validación/contribuciones del Jacobiano y trayectoria de muñeca.
+fases, validación/contribuciones del Jacobiano, trayectoria de muñeca y, cuando existe
+la salida M12, momentos netos por articulación y componentes de fuerzas de reacción en
+`reports/figures/inverse_dynamics/`. Las figuras M12 muestran la hipótesis de fuerza
+externa cuando está etiquetada en el CSV; con `GRF=0`, sus valores son solo exploratorios
+y no representan las cargas reales durante el apoyo.
 
 ```python
 import matplotlib.pyplot as plt
@@ -719,7 +726,7 @@ M12 para que las limitaciones queden visibles.
 
 ## 4. Orden de ejecución (`scripts/run_pipeline.py`)
 
-Al ejecutar `python scripts/run_pipeline.py --raw data/raw`, el punto de entrada corre M1–M6, M7 y M8 (para los grupos que declaran `jacobian`, actualmente `posterior_brazo`), y luego M10, M12, M13 y M14. M12 solo calcula fuerzas si tiene una entrada GRF y reloj compartido verificado. Las salidas relevantes son:
+Al ejecutar `python scripts/run_pipeline.py --raw data/raw`, el punto de entrada corre M1–M6, M7 y M8 (para los grupos que declaran `jacobian`, actualmente `posterior_brazo`), y luego M10, M12, M13 y M14. M12 está activado en `assume_flight_no_grf`; para analizar cargas durante el apoyo se necesita cambiar a `measured_grf`, aportar GRF/CoP y verificar el reloj común. Las salidas relevantes son:
 
 - M7: `reports/tables/events/` (`eventos.csv`, `fases.csv`, `picos_secuencia.csv`, `secuencia.csv`).
 - M8: `data/processed/jacobian/<grupo>_jacobian.csv` y `reports/tables/jacobian/validacion.csv`.

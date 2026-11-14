@@ -76,12 +76,14 @@ statistics:
     omega_codo: {group: posterior_brazo, column: omega_interior_codo}
     rapidez_muneca: {group: posterior_brazo, column: speed_muneca}
 
-# ---- M12: dinámica inversa (desactivada hasta verificar GRF y reloj común) ----
+# ---- M12: estimación sin GRF; asumir fase aérea en todo el registro ----
 inverse_dynamics:
-  enabled: false
+  enabled: true
+  force_mode: assume_flight_no_grf # No usar estos resultados para la fase de apoyo.
   shared_clock_verified: false
   file: grf/grf.csv
   kinematics_group: posterior_pierna
+  segment_columns: {foot: pie, shank: pierna, thigh: muslo}
   contact_threshold_n: 20.0
   columns:
     time: time_s
@@ -93,3 +95,19 @@ inverse_dynamics:
     height_m: 1.64
     body_mass_kg: 58.0
     foot_length_m: 0.25
+
+# M12 superior exploratorio: el extremo distal muñeca se trata como libre.
+upper_limb_inverse_dynamics:
+  enabled: true
+  force_mode: assume_zero_wrist_force
+  kinematics_group: posterior_brazo
+  markers: {shoulder: hombro, elbow: codo, wrist: muneca}
+  cv_warn: 0.05
+  anthropometry:
+    body_mass_kg: 58.0
+    upper_arm_mass_fraction: 0.0271
+    forearm_mass_fraction: 0.0162
+    upper_arm_com_fraction: 0.436
+    forearm_com_fraction: 0.430
+    upper_arm_gyration_fraction: 0.322
+    forearm_gyration_fraction: 0.303

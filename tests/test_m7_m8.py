@@ -239,6 +239,40 @@ def test_inverse_dynamics_runs_only_with_configured_synced_grf(tmp_path):
     assert len(output) == len(time_s) and output["contact"].all()
 
 
+def test_inverse_dynamics_runs_without_grf_under_explicit_flight_assumption(tmp_path):
+    out = tmp_path / "out"
+    kin_dir = out / "data/processed/kinematics"
+    kin_dir.mkdir(parents=True)
+    time_s = np.arange(0, 0.1, 0.01)
+    kin = {"time_s": time_s, "ax_tobillo": np.zeros_like(time_s),
+           "ay_tobillo": np.zeros_like(time_s)}
+    for segment in ("pie", "pierna", "muslo"):
+        kin[f"theta_seg_{segment}"] = np.full_like(time_s, -np.pi / 2)
+        kin[f"omega_seg_{segment}"] = np.zeros_like(time_s)
+        kin[f"alpha_seg_{segment}"] = np.zeros_like(time_s)
+    pd.DataFrame(kin).to_csv(kin_dir / "posterior_pierna_kinematics.csv", index=False)
+    config = tmp_path / "pipeline.yaml"
+    config.write_text(
+        "inverse_dynamics:\n"
+        "  enabled: true\n"
+        "  force_mode: assume_flight_no_grf\n"
+        "  kinematics_group: posterior_pierna\n"
+        "  segment_columns: {foot: pie, shank: pierna, thigh: muslo}\n"
+        "  anthropometry: {height_m: 1.64, body_mass_kg: 58, foot_length_m: 0.25}\n",
+        encoding="utf-8")
+
+    result = inverse_dynamics.run_inverse_dynamics(out, config)
+    output = pd.read_csv(out / "data/processed/inverse_dynamics/posterior_pierna_inverse_dynamics.csv")
+    assert result["status"] == "completed_assumed_flight"
+    assert "fase aérea" in result["message"] and result["warnings"]
+    assert (output["GRF_x_N"] == 0).all() and (output["GRF_z_N"] == 0).all()
+    assert output["external_force_mode"].eq("GRF=0; fase aérea asumida").all()
+    assert not output["contact"].any()
+    run_report(out)
+    assert "sus fuerzas/torques no deben interpretarse como cargas reales durante el apoyo" in (
+        out / "reports/report.md").read_text()
+
+
 def test_report_and_visualizations_write_outputs(tmp_path):
     kin_dir = tmp_path / "data/processed/kinematics"
     kin_dir.mkdir(parents=True)
@@ -247,8 +281,21 @@ def test_report_and_visualizations_write_outputs(tmp_path):
                   "vx_muneca": np.cos(t), "vy_muneca": np.sin(t),
                   "speed_muneca": np.ones(len(t))}).to_csv(
                       kin_dir / "posterior_brazo_kinematics.csv", index=False)
+    inverse_dir = tmp_path / "data/processed/inverse_dynamics"
+    inverse_dir.mkdir(parents=True)
+    inverse = {"time_s": t, "external_force_mode": "GRF=0; fase aérea asumida"}
+    for joint in ("ankle", "knee", "hip"):
+        inverse[f"T_{joint}_Nm"] = np.sin(t)
+        inverse[f"Fx_{joint}_N"] = np.cos(t)
+        inverse[f"Fz_{joint}_N"] = np.sin(t)
+    pd.DataFrame(inverse).to_csv(
+        inverse_dir / "posterior_pierna_inverse_dynamics.csv", index=False)
     result = viz.run_visualizations(tmp_path)
     assert any(p.name == "posterior_brazo.png" for p in result["figures"])
+    assert (tmp_path / "reports/figures/inverse_dynamics/"
+            "posterior_pierna_inverse_dynamics_joint_moments.png").exists()
+    assert (tmp_path / "reports/figures/inverse_dynamics/"
+            "posterior_pierna_inverse_dynamics_joint_reaction_forces.png").exists()
     report = run_report(tmp_path, warnings=["test warning"])
     assert report["report"].exists() and report["decision_log"].exists()
     assert "test warning" in report["report"].read_text()
@@ -275,6 +322,7 @@ def test_run_pipeline_entrypoint_generates_m7_and_m8_outputs(tmp_path):
     assert (out / "reports/tables/catalog/catalogo.csv").exists()
     assert (out / "reports/tables/statistics/descriptivos_por_fase.csv").exists()
     id_status = pd.read_csv(out / "reports/tables/inverse_dynamics/status.csv")
-    assert id_status.loc[0, "status"] == "disabled"
+    assert id_status.loc[0, "status"] == "not_run"
+    assert "requiere cinemática procesada" in id_status.loc[0, "message"]
     assert (out / "reports/report.md").exists()
     assert list((out / "reports/figures").rglob("*.png"))

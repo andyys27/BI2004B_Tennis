@@ -21,7 +21,7 @@ DEFAULTS: dict = {
     "coord_unit_overrides": {},            # {"ruta/archivo.csv": "cm"}
     "groups": {},
     "statistics": {"series": {}},
-    "inverse_dynamics": {"enabled": False},
+    "inverse_dynamics": {"enabled": False, "force_mode": "measured_grf"},
 }
 
 
