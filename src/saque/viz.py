@@ -163,10 +163,20 @@ def plot_wrist_trajectory(filtered: pd.DataFrame, kin: pd.DataFrame, path: Path,
 
 
 def _inverse_dynamics_note(data: pd.DataFrame) -> str:
-    if "external_force_mode" not in data:
-        return ""
-    modes = data["external_force_mode"].dropna().unique()
-    return str(modes[0]) if len(modes) == 1 else "Modo de fuerza externo variable"
+    notes = []
+    for column in ("tracked_side", "external_force_mode"):
+        if column in data:
+            values = data[column].dropna().unique()
+            if len(values) == 1:
+                notes.append(str(values[0]))
+            elif len(values) > 1:
+                notes.append(f"{column} variable")
+    if "tracking_valid" in data:
+        valid = data["tracking_valid"].astype(bool)
+        invalid_count = int((~valid).sum())
+        if invalid_count:
+            notes.append(f"{invalid_count} muestras enmascaradas por QC")
+    return "; ".join(notes)
 
 
 def _plot_inverse_dynamics(data: pd.DataFrame, path: Path, quantity: str) -> bool:
@@ -174,6 +184,8 @@ def _plot_inverse_dynamics(data: pd.DataFrame, path: Path, quantity: str) -> boo
         joints = {"ankle": "Tobillo", "knee": "Rodilla", "hip": "Cadera"}
     elif "T_shoulder_Nm" in data:
         joints = {"shoulder": "Hombro", "elbow": "Codo"}
+    elif "T_hip_Nm" in data:
+        joints = {"hip": "Cadera", "knee": "Rodilla"}
     else:
         return False
     if "time_s" not in data:
@@ -186,10 +198,12 @@ def _plot_inverse_dynamics(data: pd.DataFrame, path: Path, quantity: str) -> boo
     time_s = data["time_s"].to_numpy(float)
     if not np.isfinite(time_s).all() or np.any(np.diff(time_s) <= 0):
         raise ValueError("M13: el tiempo de dinámica inversa debe ser finito y creciente")
-    if not np.isfinite(data[columns].to_numpy(float)).all():
-        raise ValueError("M13: las fuerzas/torques de dinámica inversa contienen valores no finitos")
+    if np.isinf(data[columns].to_numpy(float)).any():
+        raise ValueError("M13: las fuerzas/torques de dinámica inversa contienen infinitos")
 
-    fig, axes = plt.subplots(3, 1, sharex=True, figsize=(9, 8))
+    fig, axes = plt.subplots(len(joints), 1, sharex=True,
+                             figsize=(9, 3.2 * len(joints)), squeeze=False)
+    axes = axes[:, 0]
     for ax, (joint, label) in zip(axes, joints.items()):
         if quantity == "moments":
             ax.plot(time_s, data[f"T_{joint}_Nm"], color="#C00000", label="Momento neto")

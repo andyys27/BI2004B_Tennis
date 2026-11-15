@@ -83,6 +83,7 @@ inverse_dynamics:
   shared_clock_verified: false
   file: grf/grf.csv
   kinematics_group: posterior_pierna
+  tracked_side: derecha (marcador PD; vista posterior)
   segment_columns: {foot: pie, shank: pierna, thigh: muslo}
   contact_threshold_n: 20.0
   columns:
@@ -95,6 +96,26 @@ inverse_dynamics:
     height_m: 1.64
     body_mass_kg: 58.0
     foot_length_m: 0.25
+
+# M12 exploratorio PI1 (izquierda): cadena cadera-rodilla-tobillo, sin pie/GRF.
+left_lower_limb_inverse_dynamics:
+  enabled: true
+  force_mode: assume_zero_ankle_force
+  kinematics_group: lateral_pierna
+  output_name: lateral_PI1_left
+  tracked_side: izquierda (PI1; vista lateral)
+  markers: {hip: cadera, knee: rodilla, ankle: tobillo}
+  cv_warn: 0.05
+  length_outlier_mad_threshold: 5.0
+  derivative_margin_samples: 6
+  anthropometry:
+    body_mass_kg: 58.0
+    thigh_mass_fraction: 0.10
+    shank_mass_fraction: 0.0465
+    thigh_com_fraction: 0.433
+    shank_com_fraction: 0.433
+    thigh_gyration_fraction: 0.323
+    shank_gyration_fraction: 0.302
 
 # M12 superior exploratorio: el extremo distal muñeca se trata como libre.
 upper_limb_inverse_dynamics:

@@ -74,16 +74,44 @@ def upper_limb_parameters(body_mass_kg: float, upper_arm_length_m: float,
     if body_mass_kg <= 0 or upper_arm_length_m <= 0 or forearm_length_m <= 0:
         raise ValueError("masa corporal y longitudes de brazo deben ser positivas")
 
-    def segment(length, name):
-        mass = body_mass_kg * float(anthropometry[f"{name}_mass_fraction"])
-        com = length * float(anthropometry[f"{name}_com_fraction"])
-        inertia = mass * (length * float(anthropometry[f"{name}_gyration_fraction"])) ** 2
-        return Segment(length, mass, com, inertia)
-
     return UpperLimb(
-        upper_arm=segment(upper_arm_length_m, "upper_arm"),
-        forearm=segment(forearm_length_m, "forearm"),
+        upper_arm=_segment_from_anthropometry(
+            upper_arm_length_m, body_mass_kg, "upper_arm", anthropometry),
+        forearm=_segment_from_anthropometry(
+            forearm_length_m, body_mass_kg, "forearm", anthropometry),
     )
+
+
+def _segment_from_anthropometry(length_m: float, body_mass_kg: float,
+                                name: str, anthropometry: dict) -> Segment:
+    mass = body_mass_kg * float(anthropometry[f"{name}_mass_fraction"])
+    com = length_m * float(anthropometry[f"{name}_com_fraction"])
+    inertia = mass * (length_m * float(anthropometry[f"{name}_gyration_fraction"])) ** 2
+    return Segment(length_m, mass, com, inertia)
+
+
+def _rigid_segment_length_outliers(filtered: pd.DataFrame, segment_markers: list[tuple[str, str]],
+                                   threshold_mad: float, margin_samples: int) -> np.ndarray:
+    """Marca saltos extremos de longitud y una vecindad para proteger derivadas angulares."""
+    invalid = np.zeros(len(filtered), dtype=bool)
+    if threshold_mad <= 0 or margin_samples < 0:
+        raise ValueError("threshold_mad debe ser positivo y margin_samples no negativo")
+    for proximal, distal in segment_markers:
+        length = np.hypot(
+            filtered[f"x_{distal}"].to_numpy(float) - filtered[f"x_{proximal}"].to_numpy(float),
+            filtered[f"y_{distal}"].to_numpy(float) - filtered[f"y_{proximal}"].to_numpy(float),
+        )
+        median = float(np.nanmedian(length))
+        mad = float(np.nanmedian(np.abs(length - median)))
+        tolerance = threshold_mad * max(mad, abs(median) * 1e-6, 1e-9)
+        invalid |= ~np.isfinite(length) | (np.abs(length - median) > tolerance)
+
+    flagged = np.flatnonzero(invalid)
+    for offset in range(1, margin_samples + 1):
+        before, after = flagged - offset, flagged + offset
+        invalid[before[before >= 0]] = True
+        invalid[after[after < len(invalid)]] = True
+    return invalid
 
 
 def _vector(name, values, n):
@@ -180,29 +208,29 @@ def inverse_dynamics_2d(time_s, angles, angular_velocity, angular_acceleration,
     })
 
 
-def inverse_dynamics_upper_limb_2d(
+def inverse_dynamics_two_segment_2d(
         time_s, angles, angular_velocity, angular_acceleration,
-        shoulder_acceleration, elbow_acceleration, parameters: UpperLimb) -> pd.DataFrame:
-    """Calcula reacciones y momentos de hombro/codo suponiendo muñeca sin carga externa.
-
-    La cadena termina en la muñeca: no se incluye mano, raqueta ni impacto con pelota.
-    """
+        proximal_acceleration, middle_acceleration, proximal_segment: Segment,
+        distal_segment: Segment, gravity_m_s2: float = 9.81) -> pd.DataFrame:
+    """Resuelve una cadena de dos segmentos con extremo distal libre."""
     t = np.asarray(time_s, float)
     if t.ndim != 1 or len(t) == 0 or not np.isfinite(t).all() or np.any(np.diff(t) <= 0):
         raise ValueError("time_s debe ser finito y estrictamente creciente")
     n = len(t)
-    keys = ("upper_arm", "forearm")
+    keys = ("proximal", "distal")
     th = {k: _vector(f"angles[{k}]", angles[k], n) for k in keys}
     om = {k: _vector(f"angular_velocity[{k}]", angular_velocity[k], n) for k in keys}
     al = {k: _vector(f"angular_acceleration[{k}]", angular_acceleration[k], n) for k in keys}
-    shoulder_a = np.asarray(shoulder_acceleration, float)
-    elbow_a = np.asarray(elbow_acceleration, float)
-    for name, value in (("shoulder_acceleration", shoulder_a),
-                        ("elbow_acceleration", elbow_a)):
+    proximal_a = np.asarray(proximal_acceleration, float)
+    middle_a = np.asarray(middle_acceleration, float)
+    for name, value in (("proximal_acceleration", proximal_a),
+                        ("middle_acceleration", middle_a)):
         if value.shape != (n, 2) or not np.isfinite(value).all():
             raise ValueError(f"{name} debe tener forma (N, 2) y ser finita")
 
-    gravity = np.array([0.0, -parameters.gravity_m_s2])
+    if gravity_m_s2 <= 0:
+        raise ValueError("gravity_m_s2 debe ser positivo")
+    gravity = np.array([0.0, -gravity_m_s2])
 
     def segment_geometry(name):
         e = np.column_stack([np.cos(th[name]), np.sin(th[name])])
@@ -210,39 +238,62 @@ def inverse_dynamics_upper_limb_2d(
         q = al[name][:, None] * e_perp - om[name][:, None] ** 2 * e
         return e, q
 
-    forearm = parameters.forearm
-    e_forearm, q_forearm = segment_geometry("forearm")
-    a_com_forearm = elbow_a + forearm.com_from_proximal_m * q_forearm
-    f_elbow = forearm.mass_kg * (a_com_forearm - gravity)
-    r_elbow_com_forearm = -forearm.com_from_proximal_m * e_forearm
-    m_elbow = (forearm.inertia_kgm2 * al["forearm"] -
-               _cross2(r_elbow_com_forearm, f_elbow))
+    e_distal, q_distal = segment_geometry("distal")
+    a_com_distal = middle_a + distal_segment.com_from_proximal_m * q_distal
+    f_middle = distal_segment.mass_kg * (a_com_distal - gravity)
+    r_middle_com_distal = -distal_segment.com_from_proximal_m * e_distal
+    m_middle = (distal_segment.inertia_kgm2 * al["distal"] -
+                _cross2(r_middle_com_distal, f_middle))
 
-    upper_arm = parameters.upper_arm
-    e_upper, q_upper = segment_geometry("upper_arm")
-    a_com_upper = shoulder_a + upper_arm.com_from_proximal_m * q_upper
-    f_elbow_on_upper = -f_elbow
-    f_shoulder = upper_arm.mass_kg * (a_com_upper - gravity) - f_elbow_on_upper
-    r_shoulder_com = -upper_arm.com_from_proximal_m * e_upper
-    distal_distance = upper_arm.length_m - upper_arm.com_from_proximal_m
-    r_elbow_com_upper = distal_distance * e_upper
-    m_shoulder = (upper_arm.inertia_kgm2 * al["upper_arm"] -
-                  _cross2(r_shoulder_com, f_shoulder) -
-                  _cross2(r_elbow_com_upper, f_elbow_on_upper) + m_elbow)
+    e_proximal, q_proximal = segment_geometry("proximal")
+    a_com_proximal = proximal_a + proximal_segment.com_from_proximal_m * q_proximal
+    f_middle_on_proximal = -f_middle
+    f_proximal = (proximal_segment.mass_kg * (a_com_proximal - gravity)
+                  - f_middle_on_proximal)
+    r_proximal_com = -proximal_segment.com_from_proximal_m * e_proximal
+    distal_distance = proximal_segment.length_m - proximal_segment.com_from_proximal_m
+    r_middle_com_proximal = distal_distance * e_proximal
+    m_proximal = (proximal_segment.inertia_kgm2 * al["proximal"] -
+                  _cross2(r_proximal_com, f_proximal) -
+                  _cross2(r_middle_com_proximal, f_middle_on_proximal) + m_middle)
 
     return pd.DataFrame({
         "time_s": t,
-        "Fx_elbow_N": f_elbow[:, 0], "Fz_elbow_N": f_elbow[:, 1],
-        "T_elbow_Nm": m_elbow,
-        "Fx_shoulder_N": f_shoulder[:, 0], "Fz_shoulder_N": f_shoulder[:, 1],
-        "T_shoulder_Nm": m_shoulder,
-        "wrist_external_force_assumed_N": 0.0,
-        "upper_arm_length_m": upper_arm.length_m,
-        "forearm_length_m": forearm.length_m,
-        "upper_arm_mass_kg": upper_arm.mass_kg,
-        "forearm_mass_kg": forearm.mass_kg,
-        "external_force_mode": "Fuerza externa en muñeca=0; mano/raqueta excluidas",
+        "Fx_middle_N": f_middle[:, 0], "Fz_middle_N": f_middle[:, 1],
+        "T_middle_Nm": m_middle,
+        "Fx_proximal_N": f_proximal[:, 0], "Fz_proximal_N": f_proximal[:, 1],
+        "T_proximal_Nm": m_proximal,
+        "distal_external_force_assumed_N": 0.0,
+        "proximal_segment_length_m": proximal_segment.length_m,
+        "distal_segment_length_m": distal_segment.length_m,
+        "proximal_segment_mass_kg": proximal_segment.mass_kg,
+        "distal_segment_mass_kg": distal_segment.mass_kg,
     })
+
+
+def inverse_dynamics_upper_limb_2d(
+        time_s, angles, angular_velocity, angular_acceleration,
+        shoulder_acceleration, elbow_acceleration, parameters: UpperLimb) -> pd.DataFrame:
+    """Calcula reacciones y momentos de hombro/codo suponiendo muñeca sin carga externa."""
+    result = inverse_dynamics_two_segment_2d(
+        time_s, {"proximal": angles["upper_arm"], "distal": angles["forearm"]},
+        {"proximal": angular_velocity["upper_arm"], "distal": angular_velocity["forearm"]},
+        {"proximal": angular_acceleration["upper_arm"], "distal": angular_acceleration["forearm"]},
+        shoulder_acceleration, elbow_acceleration, parameters.upper_arm, parameters.forearm,
+        parameters.gravity_m_s2,
+    )
+    result = result.rename(columns={
+        "Fx_middle_N": "Fx_elbow_N", "Fz_middle_N": "Fz_elbow_N",
+        "T_middle_Nm": "T_elbow_Nm", "Fx_proximal_N": "Fx_shoulder_N",
+        "Fz_proximal_N": "Fz_shoulder_N", "T_proximal_Nm": "T_shoulder_Nm",
+        "distal_external_force_assumed_N": "wrist_external_force_assumed_N",
+        "proximal_segment_length_m": "upper_arm_length_m",
+        "distal_segment_length_m": "forearm_length_m",
+        "proximal_segment_mass_kg": "upper_arm_mass_kg",
+        "distal_segment_mass_kg": "forearm_mass_kg",
+    })
+    result["external_force_mode"] = "Fuerza externa en muñeca=0; mano/raqueta excluidas"
+    return result
 
 
 def _write_status(out: Path, status: str, message: str, warnings: list[str]) -> dict:
@@ -333,6 +384,126 @@ def run_upper_limb_inverse_dynamics(out_dir=".", config="config/pipeline.yaml") 
 
     pd.DataFrame([{"status": status, "message": message}]).to_csv(status_path, index=False)
     if status != "completed_assumed_zero_wrist_force" and status != "disabled":
+        warnings.append(message)
+    return {"status": status, "message": message, "warnings": warnings}
+
+
+def run_left_lower_limb_inverse_dynamics(out_dir=".", config="config/pipeline.yaml") -> dict:
+    """Calcula cadera/rodilla de PI1 con el tobillo libre; el pie y la GRF se excluyen."""
+    cfg, out = load_config(config), Path(out_dir)
+    spec = cfg.get("left_lower_limb_inverse_dynamics") or {}
+    status_path = out / "reports/tables/inverse_dynamics/left_limb_status.csv"
+    status_path.parent.mkdir(parents=True, exist_ok=True)
+    status, message, warnings = "disabled", "M12 de pierna izquierda está desactivado.", []
+
+    if spec.get("enabled"):
+        if spec.get("force_mode") != "assume_zero_ankle_force":
+            raise ValueError(
+                "M12 izquierda requiere force_mode='assume_zero_ankle_force'; "
+                "no se dispone de fuerza externa medida en tobillo."
+            )
+        group = spec["kinematics_group"]
+        kin_path = out / "data/processed/kinematics" / f"{group}_kinematics.csv"
+        filtered_path = out / "data/processed/filtered" / f"{group}_filtered.csv"
+        missing_paths = [str(path) for path in (kin_path, filtered_path) if not path.is_file()]
+        if missing_paths:
+            status, message = "not_run", f"M12 izquierda requiere archivos: {missing_paths}"
+        else:
+            kin, filtered = pd.read_csv(kin_path), pd.read_csv(filtered_path)
+            markers = spec.get("markers", {})
+            hip = markers.get("hip", "cadera")
+            knee = markers.get("knee", "rodilla")
+            ankle = markers.get("ankle", "tobillo")
+            thigh_lengths = segment_lengths(filtered, hip, knee)
+            shank_lengths = segment_lengths(filtered, knee, ankle)
+            if not np.isfinite([thigh_lengths["L"], shank_lengths["L"]]).all():
+                raise ValueError("M12 izquierda: longitudes de segmentos no finitas")
+            kin_time = kin["time_s"].to_numpy(float)
+            filtered_time = filtered["time_s"].to_numpy(float)
+            if (len(kin_time) != len(filtered_time)
+                    or not np.allclose(kin_time, filtered_time, rtol=0, atol=1e-9)):
+                raise ValueError("M12 izquierda: cinemática y coordenadas no comparten la malla temporal")
+
+            anthropometry = spec["anthropometry"]
+            body_mass = float(anthropometry["body_mass_kg"])
+            thigh = _segment_from_anthropometry(
+                thigh_lengths["L"], body_mass, "thigh", anthropometry)
+            shank = _segment_from_anthropometry(
+                shank_lengths["L"], body_mass, "shank", anthropometry)
+            angles = {
+                "proximal": kin["theta_seg_muslo"].to_numpy(float),
+                "distal": kin["theta_seg_pierna"].to_numpy(float),
+            }
+            omega = {
+                "proximal": kin["omega_seg_muslo"].to_numpy(float),
+                "distal": kin["omega_seg_pierna"].to_numpy(float),
+            }
+            alpha = {
+                "proximal": kin["alpha_seg_muslo"].to_numpy(float),
+                "distal": kin["alpha_seg_pierna"].to_numpy(float),
+            }
+            result = inverse_dynamics_two_segment_2d(
+                kin_time, angles, omega, alpha,
+                np.column_stack([kin[f"ax_{hip}"], kin[f"ay_{hip}"]]),
+                np.column_stack([kin[f"ax_{knee}"], kin[f"ay_{knee}"]]),
+                thigh, shank, float(spec.get("gravity_m_s2", 9.81)),
+            ).rename(columns={
+                "Fx_middle_N": "Fx_knee_N", "Fz_middle_N": "Fz_knee_N",
+                "T_middle_Nm": "T_knee_Nm", "Fx_proximal_N": "Fx_hip_N",
+                "Fz_proximal_N": "Fz_hip_N", "T_proximal_Nm": "T_hip_Nm",
+                "distal_external_force_assumed_N": "ankle_external_force_assumed_N",
+                "proximal_segment_length_m": "thigh_length_m",
+                "distal_segment_length_m": "shank_length_m",
+                "proximal_segment_mass_kg": "thigh_mass_kg",
+                "distal_segment_mass_kg": "shank_mass_kg",
+            })
+            invalid_tracking = _rigid_segment_length_outliers(
+                filtered,
+                [(hip, knee), (knee, ankle)],
+                float(spec.get("length_outlier_mad_threshold", 5.0)),
+                int(spec.get("derivative_margin_samples", 2)),
+            )
+            result["tracking_valid"] = ~invalid_tracking
+            result["tracking_qc_reason"] = np.where(
+                invalid_tracking, "longitud_segmentaria_atipica_o_margen_derivada", "")
+            force_moment_columns = [
+                "Fx_knee_N", "Fz_knee_N", "T_knee_Nm",
+                "Fx_hip_N", "Fz_hip_N", "T_hip_Nm",
+            ]
+            result.loc[invalid_tracking, force_moment_columns] = np.nan
+            result["tracked_side"] = str(
+                spec.get("tracked_side", "izquierda (PI1; vista lateral)"))
+            result["external_force_mode"] = (
+                "Fuerza externa en tobillo=0; pie/GRF excluidos")
+            output_name = spec.get("output_name", "lateral_PI1_left")
+            result_path = out / "data/processed/inverse_dynamics" / f"{output_name}_inverse_dynamics.csv"
+            result_path.parent.mkdir(parents=True, exist_ok=True)
+            result.to_csv(result_path, index=False)
+            status = "completed_assumed_zero_ankle_force"
+            message = (
+                f"Procesadas {len(result)} muestras para PI1; fuerza externa en tobillo=0. "
+                f"Se excluyen pie y GRF; {int(invalid_tracking.sum())} muestras se enmascararon "
+                "por QC de longitud; resultado exploratorio."
+            )
+            warnings.append(
+                "M12 izquierda supone fuerza externa nula en tobillo y excluye pie/GRF; "
+                "no representa las cargas reales de apoyo."
+            )
+            cv_warn = float(spec.get("cv_warn", 0.05))
+            if max(thigh_lengths["cv"], shank_lengths["cv"]) > cv_warn:
+                warnings.append(
+                    "M12 izquierda: CV alto en longitudes cadera-rodilla/rodilla-tobillo "
+                    f"({thigh_lengths['cv']:.1%}, {shank_lengths['cv']:.1%}); "
+                    "revisar tracking o movimiento fuera del plano."
+                )
+            if invalid_tracking.any():
+                warnings.append(
+                    f"M12 izquierda: se enmascararon {int(invalid_tracking.sum())} muestras "
+                    "con longitudes segmentarias atípicas y su margen de derivación."
+                )
+
+    pd.DataFrame([{"status": status, "message": message}]).to_csv(status_path, index=False)
+    if status != "completed_assumed_zero_ankle_force" and status != "disabled":
         warnings.append(message)
     return {"status": status, "message": message, "warnings": warnings}
 
@@ -437,6 +608,7 @@ def run_inverse_dynamics(out_dir=".", config="config/pipeline.yaml", raw_dir="da
                     np.column_stack([kin["ax_tobillo"].to_numpy(float)[common],
                                      kin["ay_tobillo"].to_numpy(float)[common]]),
                     params, float(spec.get("contact_threshold_n", 20.0)))
+                result["tracked_side"] = str(spec.get("tracked_side", "no especificado"))
                 if force_mode == "assume_flight_no_grf":
                     result["external_force_mode"] = "GRF=0; fase aérea asumida"
                 result_path = out / "data/processed/inverse_dynamics" / f"{kin_group}_inverse_dynamics.csv"

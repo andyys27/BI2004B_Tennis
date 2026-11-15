@@ -26,6 +26,10 @@ La cantidad indicada es el número de filas de datos, sin contar el encabezado. 
 
 En los archivos angulares laterales, `rod`/`tob` identifican rodilla/tobillo. Los archivos con `PI1` en el nombre corresponden a la pierna izquierda.
 
+La cadena lineal lateral disponible incluye cadera, rodilla y tobillo, sin marcador de
+punta del pie. M12 la asocia a PI1 y solo puede estimar rodilla/cadera bajo la hipótesis
+de fuerza externa nula en tobillo; no produce una estimación de torque de tobillo.
+
 ### Vista posterior
 
 | Archivo | Filas | Columnas y significado indicado por los nombres |

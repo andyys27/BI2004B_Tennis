@@ -625,6 +625,15 @@ proximal. Las fuerzas y momentos de acción-reacción se transmiten entre segmen
 Los ángulos absolutos se miden desde el eje x positivo, con z vertical hacia arriba;
 el momento positivo es antihorario.
 
+`PD` identifica la pierna derecha y `PI1` la izquierda. Para la derecha, M12 usa la
+cadena posterior cadera–rodilla–tobillo–punta del pie. Para la izquierda usa la cadena
+de marcadores lateral cadera–rodilla–tobillo asociada a PI1; al no haber punto de pie,
+solo calcula fuerzas/momentos en rodilla y cadera, suponiendo fuerza externa cero en
+tobillo. Las muestras con longitudes segmentarias atípicas y las seis muestras vecinas
+por lado (margen de 50 ms a 120 fps) se marcan inválidas para limitar la contaminación
+de las derivadas; sus fuerzas/momentos quedan vacíos (NaN), no como picos. Ambos CSV
+identifican el lado y el modo de carga supuesto.
+
 En modo `measured_grf`, la fuerza de plataforma actúa en el centro de presión. El CSV
 debe contener tiempo en segundos, `GRF_x` y `vGRF` en N y el vector
 `(cop_x_from_ankle_m, cop_z_from_ankle_m)` en metros; se exige reloj compartido
@@ -641,6 +650,13 @@ fuerza externa, pero las fuerzas internas del tobillo no se fijan a cero. Los
 parámetros antropométricos son valores iniciales y deben validarse para cada
 participante.
 
+La rama superior usa la vista posterior y los segmentos hombro–codo y codo–muñeca.
+Calcula reacciones y momentos netos en codo y hombro, suponiendo fuerza externa cero
+en muñeca. Estima longitudes de los marcadores filtrados y usa proporciones
+antropométricas de referencia configuradas para masas, centros de masa y radios de
+giro. La salida está en `posterior_brazo_inverse_dynamics.csv`; no calcula fuerzas
+de la mano, raqueta ni pelota y no debe interpretarse como carga real del saque.
+
 El código no implementa literalmente las fórmulas cerradas de
 `contexto_dinamica_inversa.md`: estas se conservan como formulación preliminar y deben
 compararse con el modelo vectorial antes de interpretarlas como resultados equivalentes.
@@ -652,6 +668,8 @@ compararse con el modelo vectorial antes de interpretarlas como resultados equiv
 3. La sincronización entre GRF, video y centro de presión debe validarse; un archivo temporalmente alineado de forma incorrecta produce fuerzas/torques engañosos.
 4. El modelo cierra en cadera sin tronco → no sirve para cargas de columna, hombro o codo.
 5. Sin GRF no se puede identificar si una muestra corresponde a apoyo o vuelo; el modo actual asume vuelo en todo el registro y no debe usarse para interpretar el saque durante el apoyo.
+6. La cadena izquierda no incluye pie ni GRF y supone fuerza externa cero en tobillo; solo entrega cadera y rodilla. La cadena derecha asume GRF=0 en todo el registro. Ninguna permite interpretar cargas reales de apoyo.
+7. El tren superior es un modelo 2D de brazo y antebrazo que termina en la muñeca. Se supone fuerza externa nula en muñeca y se excluyen mano, raqueta y pelota; sus momentos no describen las cargas reales del golpe. Las masas, centros de masa y radios de giro son proporciones antropométricas de referencia, no mediciones individuales.
 
 #### 12.4 Cómo validarlo sin GRF (tests)
 
@@ -731,7 +749,7 @@ Al ejecutar `python scripts/run_pipeline.py --raw data/raw`, el punto de entrada
 - M7: `reports/tables/events/` (`eventos.csv`, `fases.csv`, `picos_secuencia.csv`, `secuencia.csv`).
 - M8: `data/processed/jacobian/<grupo>_jacobian.csv` y `reports/tables/jacobian/validacion.csv`.
 - M10: `reports/tables/statistics/` (descriptivos por fase, curvas normalizadas y estado de variabilidad).
-- M12: `data/processed/inverse_dynamics/` si se ejecuta; en caso contrario, se guarda el motivo en `reports/tables/inverse_dynamics/status.csv`.
+- M12: `posterior_pierna_inverse_dynamics.csv` (pierna derecha, marcador PD), `lateral_PI1_left_inverse_dynamics.csv` (pierna izquierda, cadera/rodilla) y `posterior_brazo_inverse_dynamics.csv`, bajo `data/processed/inverse_dynamics/`. Las tres cadenas tienen gráficas de fuerzas y momentos en `reports/figures/inverse_dynamics/`. Los estados se registran en `reports/tables/inverse_dynamics/`.
 - M13: figuras bajo `reports/figures/`; M14: `reports/report.md`, `reports/log_decisiones.md` y tabla consolidada.
 
 Las salidas intermedias y procesadas se separan por procedimiento: sincronización en `data/interim/synchronized/`; filtrado, cinemática y Jacobiano en sus respectivas carpetas bajo `data/processed/`. Los reportes tabulares también se agrupan por procedimiento.

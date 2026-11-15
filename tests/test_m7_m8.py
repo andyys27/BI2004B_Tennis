@@ -204,6 +204,153 @@ def test_inverse_dynamics_freefall_and_static_contact():
     assert np.allclose(supported[["T_knee_Nm", "T_hip_Nm"]], 0)
 
 
+def test_segment_length_outliers_mask_derivative_neighborhood():
+    n = 11
+    data = {"x_cadera": np.zeros(n), "y_cadera": np.zeros(n),
+            "x_rodilla": np.full(n, 0.4), "y_rodilla": np.zeros(n),
+            "x_tobillo": np.full(n, 0.8), "y_tobillo": np.zeros(n)}
+    data["y_cadera"][5] = 1.0
+    invalid = inverse_dynamics._rigid_segment_length_outliers(
+        pd.DataFrame(data), [("cadera", "rodilla"), ("rodilla", "tobillo")],
+        threshold_mad=5.0, margin_samples=2)
+    assert np.flatnonzero(invalid).tolist() == [3, 4, 5, 6, 7]
+
+
+def test_upper_limb_inverse_dynamics_static_horizontal_arm():
+    anthropometry = {
+        "upper_arm_mass_fraction": 0.0271,
+        "forearm_mass_fraction": 0.0162,
+        "upper_arm_com_fraction": 0.436,
+        "forearm_com_fraction": 0.430,
+        "upper_arm_gyration_fraction": 0.322,
+        "forearm_gyration_fraction": 0.303,
+    }
+    params = inverse_dynamics.upper_limb_parameters(58.0, 0.30, 0.25, anthropometry)
+    time_s = np.arange(5) / FS
+    angles = {key: np.zeros(5) for key in ("upper_arm", "forearm")}
+    omega = {key: np.zeros(5) for key in angles}
+    alpha = {key: np.zeros(5) for key in angles}
+    result = inverse_dynamics.inverse_dynamics_upper_limb_2d(
+        time_s, angles, omega, alpha, np.zeros((5, 2)), np.zeros((5, 2)), params)
+
+    expected_elbow_force = params.forearm.mass_kg * 9.81
+    expected_elbow_moment = expected_elbow_force * params.forearm.com_from_proximal_m
+    expected_shoulder_force = (params.upper_arm.mass_kg + params.forearm.mass_kg) * 9.81
+    expected_shoulder_moment = (
+        params.upper_arm.mass_kg * 9.81 * params.upper_arm.com_from_proximal_m
+        + params.forearm.mass_kg * 9.81
+        * (params.upper_arm.length_m + params.forearm.com_from_proximal_m)
+    )
+    assert np.allclose(result["Fz_elbow_N"], expected_elbow_force)
+    assert np.allclose(result["T_elbow_Nm"], expected_elbow_moment)
+    assert np.allclose(result["Fz_shoulder_N"], expected_shoulder_force)
+    assert np.allclose(result["T_shoulder_Nm"], expected_shoulder_moment)
+
+
+def test_upper_limb_inverse_dynamics_runner_writes_results_and_assumption(tmp_path):
+    out = tmp_path / "out"
+    kin_dir = out / "data/processed/kinematics"
+    filtered_dir = out / "data/processed/filtered"
+    kin_dir.mkdir(parents=True)
+    filtered_dir.mkdir(parents=True)
+    time_s = np.arange(5) / FS
+    kin = {"time_s": time_s}
+    for segment in ("brazo", "antebrazo"):
+        kin[f"theta_seg_{segment}"] = np.zeros(5)
+        kin[f"omega_seg_{segment}"] = np.zeros(5)
+        kin[f"alpha_seg_{segment}"] = np.zeros(5)
+    for marker, x in (("hombro", 0.0), ("codo", 0.3), ("muneca", 0.55)):
+        kin[f"ax_{marker}"] = np.zeros(5)
+        kin[f"ay_{marker}"] = np.zeros(5)
+    pd.DataFrame(kin).to_csv(kin_dir / "posterior_brazo_kinematics.csv", index=False)
+    filtered = {"time_s": time_s}
+    for marker, x in (("hombro", 0.0), ("codo", 0.3), ("muneca", 0.55)):
+        filtered[f"x_{marker}"] = np.full(5, x)
+        filtered[f"y_{marker}"] = np.zeros(5)
+    pd.DataFrame(filtered).to_csv(filtered_dir / "posterior_brazo_filtered.csv", index=False)
+    config = tmp_path / "pipeline.yaml"
+    config.write_text(
+        "upper_limb_inverse_dynamics:\n"
+        "  enabled: true\n"
+        "  force_mode: assume_zero_wrist_force\n"
+        "  kinematics_group: posterior_brazo\n"
+        "  markers: {shoulder: hombro, elbow: codo, wrist: muneca}\n"
+        "  anthropometry: {body_mass_kg: 58, upper_arm_mass_fraction: 0.0271, "
+        "forearm_mass_fraction: 0.0162, upper_arm_com_fraction: 0.436, "
+        "forearm_com_fraction: 0.430, upper_arm_gyration_fraction: 0.322, "
+        "forearm_gyration_fraction: 0.303}\n",
+        encoding="utf-8")
+
+    result = inverse_dynamics.run_upper_limb_inverse_dynamics(out, config)
+    output = pd.read_csv(
+        out / "data/processed/inverse_dynamics/posterior_brazo_inverse_dynamics.csv")
+    status = pd.read_csv(
+        out / "reports/tables/inverse_dynamics/upper_limb_status.csv")
+    assert result["status"] == "completed_assumed_zero_wrist_force"
+    assert len(output) == len(time_s)
+    assert (output["wrist_external_force_assumed_N"] == 0).all()
+    assert output["external_force_mode"].str.contains("mano/raqueta excluidas").all()
+    assert status.loc[0, "status"] == result["status"]
+    run_report(out)
+    assert "supone fuerza externa nula en muñeca" in (
+        out / "reports/report.md").read_text()
+
+
+def test_left_leg_inverse_dynamics_runner_uses_pi1_chain_without_foot(tmp_path):
+    out = tmp_path / "out"
+    kin_dir = out / "data/processed/kinematics"
+    filtered_dir = out / "data/processed/filtered"
+    kin_dir.mkdir(parents=True)
+    filtered_dir.mkdir(parents=True)
+    time_s = np.arange(5) / FS
+    kin = {"time_s": time_s}
+    for segment in ("muslo", "pierna"):
+        kin[f"theta_seg_{segment}"] = np.zeros(5)
+        kin[f"omega_seg_{segment}"] = np.zeros(5)
+        kin[f"alpha_seg_{segment}"] = np.zeros(5)
+    for marker in ("cadera", "rodilla"):
+        kin[f"ax_{marker}"] = np.zeros(5)
+        kin[f"ay_{marker}"] = np.zeros(5)
+    pd.DataFrame(kin).to_csv(kin_dir / "lateral_pierna_kinematics.csv", index=False)
+    filtered = {"time_s": time_s}
+    for marker, x in (("cadera", 0.0), ("rodilla", 0.4), ("tobillo", 0.8)):
+        filtered[f"x_{marker}"] = np.full(5, x)
+        filtered[f"y_{marker}"] = np.zeros(5)
+    pd.DataFrame(filtered).to_csv(filtered_dir / "lateral_pierna_filtered.csv", index=False)
+    config = tmp_path / "pipeline.yaml"
+    config.write_text(
+        "left_lower_limb_inverse_dynamics:\n"
+        "  enabled: true\n"
+        "  force_mode: assume_zero_ankle_force\n"
+        "  kinematics_group: lateral_pierna\n"
+        "  output_name: lateral_PI1_left\n"
+        "  tracked_side: izquierda (PI1; vista lateral)\n"
+        "  markers: {hip: cadera, knee: rodilla, ankle: tobillo}\n"
+        "  anthropometry: {body_mass_kg: 58, thigh_mass_fraction: 0.10, "
+        "shank_mass_fraction: 0.0465, thigh_com_fraction: 0.433, "
+        "shank_com_fraction: 0.433, thigh_gyration_fraction: 0.323, "
+        "shank_gyration_fraction: 0.302}\n",
+        encoding="utf-8")
+
+    result = inverse_dynamics.run_left_lower_limb_inverse_dynamics(out, config)
+    output = pd.read_csv(
+        out / "data/processed/inverse_dynamics/lateral_PI1_left_inverse_dynamics.csv")
+    status = pd.read_csv(
+        out / "reports/tables/inverse_dynamics/left_limb_status.csv")
+    assert result["status"] == "completed_assumed_zero_ankle_force"
+    assert len(output) == len(time_s)
+    assert {"Fx_knee_N", "Fz_knee_N", "T_knee_Nm",
+            "Fx_hip_N", "Fz_hip_N", "T_hip_Nm"}.issubset(output.columns)
+    assert "T_ankle_Nm" not in output
+    assert output["tracked_side"].eq("izquierda (PI1; vista lateral)").all()
+    assert output["ankle_external_force_assumed_N"].eq(0).all()
+    assert output["tracking_valid"].all()
+    assert status.loc[0, "status"] == result["status"]
+    run_report(out)
+    assert "La pierna izquierda (PI1) supone fuerza externa nula en tobillo" in (
+        out / "reports/report.md").read_text()
+
+
 def test_inverse_dynamics_runs_only_with_configured_synced_grf(tmp_path):
     raw = tmp_path / "raw"
     (raw / "grf").mkdir(parents=True)
@@ -257,6 +404,7 @@ def test_inverse_dynamics_runs_without_grf_under_explicit_flight_assumption(tmp_
         "  enabled: true\n"
         "  force_mode: assume_flight_no_grf\n"
         "  kinematics_group: posterior_pierna\n"
+        "  tracked_side: derecha (marcador PD; vista posterior)\n"
         "  segment_columns: {foot: pie, shank: pierna, thigh: muslo}\n"
         "  anthropometry: {height_m: 1.64, body_mass_kg: 58, foot_length_m: 0.25}\n",
         encoding="utf-8")
@@ -267,9 +415,10 @@ def test_inverse_dynamics_runs_without_grf_under_explicit_flight_assumption(tmp_
     assert "fase aérea" in result["message"] and result["warnings"]
     assert (output["GRF_x_N"] == 0).all() and (output["GRF_z_N"] == 0).all()
     assert output["external_force_mode"].eq("GRF=0; fase aérea asumida").all()
+    assert output["tracked_side"].eq("derecha (marcador PD; vista posterior)").all()
     assert not output["contact"].any()
     run_report(out)
-    assert "sus fuerzas/torques no deben interpretarse como cargas reales durante el apoyo" in (
+    assert "no representan las cargas reales durante el apoyo" in (
         out / "reports/report.md").read_text()
 
 
@@ -290,12 +439,36 @@ def test_report_and_visualizations_write_outputs(tmp_path):
         inverse[f"Fz_{joint}_N"] = np.sin(t)
     pd.DataFrame(inverse).to_csv(
         inverse_dir / "posterior_pierna_inverse_dynamics.csv", index=False)
+    upper_inverse = {"time_s": t, "external_force_mode":
+                     "Fuerza externa en muñeca=0; mano/raqueta excluidas"}
+    for joint in ("shoulder", "elbow"):
+        upper_inverse[f"T_{joint}_Nm"] = np.sin(t)
+        upper_inverse[f"Fx_{joint}_N"] = np.cos(t)
+        upper_inverse[f"Fz_{joint}_N"] = np.sin(t)
+    pd.DataFrame(upper_inverse).to_csv(
+        inverse_dir / "posterior_brazo_inverse_dynamics.csv", index=False)
+    left_inverse = {"time_s": t, "tracked_side": "izquierda (PI1; vista lateral)",
+                    "external_force_mode": "Fuerza externa en tobillo=0; pie/GRF excluidos"}
+    for joint in ("hip", "knee"):
+        left_inverse[f"T_{joint}_Nm"] = np.sin(t)
+        left_inverse[f"Fx_{joint}_N"] = np.cos(t)
+        left_inverse[f"Fz_{joint}_N"] = np.sin(t)
+    pd.DataFrame(left_inverse).to_csv(
+        inverse_dir / "lateral_PI1_left_inverse_dynamics.csv", index=False)
     result = viz.run_visualizations(tmp_path)
     assert any(p.name == "posterior_brazo.png" for p in result["figures"])
     assert (tmp_path / "reports/figures/inverse_dynamics/"
             "posterior_pierna_inverse_dynamics_joint_moments.png").exists()
     assert (tmp_path / "reports/figures/inverse_dynamics/"
             "posterior_pierna_inverse_dynamics_joint_reaction_forces.png").exists()
+    assert (tmp_path / "reports/figures/inverse_dynamics/"
+            "posterior_brazo_inverse_dynamics_joint_moments.png").exists()
+    assert (tmp_path / "reports/figures/inverse_dynamics/"
+            "posterior_brazo_inverse_dynamics_joint_reaction_forces.png").exists()
+    assert (tmp_path / "reports/figures/inverse_dynamics/"
+            "lateral_PI1_left_inverse_dynamics_joint_moments.png").exists()
+    assert (tmp_path / "reports/figures/inverse_dynamics/"
+            "lateral_PI1_left_inverse_dynamics_joint_reaction_forces.png").exists()
     report = run_report(tmp_path, warnings=["test warning"])
     assert report["report"].exists() and report["decision_log"].exists()
     assert "test warning" in report["report"].read_text()
@@ -324,5 +497,15 @@ def test_run_pipeline_entrypoint_generates_m7_and_m8_outputs(tmp_path):
     id_status = pd.read_csv(out / "reports/tables/inverse_dynamics/status.csv")
     assert id_status.loc[0, "status"] == "not_run"
     assert "requiere cinemática procesada" in id_status.loc[0, "message"]
+    upper_status = pd.read_csv(out / "reports/tables/inverse_dynamics/upper_limb_status.csv")
+    assert upper_status.loc[0, "status"] == "completed_assumed_zero_wrist_force"
+    assert (out / "data/processed/inverse_dynamics/posterior_brazo_inverse_dynamics.csv").exists()
+    left_status = pd.read_csv(out / "reports/tables/inverse_dynamics/left_limb_status.csv")
+    assert left_status.loc[0, "status"] == "completed_assumed_zero_ankle_force"
+    assert (out / "data/processed/inverse_dynamics/lateral_PI1_left_inverse_dynamics.csv").exists()
+    assert (out / "reports/figures/inverse_dynamics/"
+            "lateral_PI1_left_inverse_dynamics_joint_moments.png").exists()
+    assert (out / "reports/figures/inverse_dynamics/"
+            "posterior_brazo_inverse_dynamics_joint_moments.png").exists()
     assert (out / "reports/report.md").exists()
     assert list((out / "reports/figures").rglob("*.png"))

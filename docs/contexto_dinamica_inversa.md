@@ -2,7 +2,7 @@
 
 Este documento describe la metodología analítica y computacional empleada para determinar las fuerzas internas y los torques articulares en la extremidad inferior (tobillo, rodilla y cadera) durante una maniobra dinámica con fase de contacto y fase aérea (brinco), utilizando un enfoque de **Dinámica Inversa en 2D (plano sagital)**.
 
-> **Estado del modelo:** las ecuaciones cerradas de este documento son la formulación inicial y no deben confundirse con la implementación actual de M12. El módulo [`inverse_dynamics.py`](../src/saque/inverse_dynamics.py) usa balances vectoriales de Newton-Euler por segmento e incorpora la masa del pie. Puede usar GRF/CoP sincronizados o asumir GRF=0 en fase aérea. La configuración actual usa esta última hipótesis para todo el registro; por ello sus resultados no representan cargas reales durante el apoyo. La equivalencia de ambas formulaciones todavía debe validarse antes de interpretar torques con datos reales.
+> **Estado del modelo:** las ecuaciones cerradas de este documento son la formulación inicial y no deben confundirse con la implementación actual de M12. El módulo [`inverse_dynamics.py`](../src/saque/inverse_dynamics.py) usa balances vectoriales de Newton-Euler por segmento. La extremidad inferior puede usar GRF/CoP sincronizados o asumir GRF=0; la configuración actual asume vuelo durante todo el registro, por lo que sus resultados no representan las cargas reales durante el apoyo. El tren superior es un cálculo 2D exploratorio que supone fuerza externa nula en muñeca y excluye mano, raqueta y pelota. Ninguno de estos modos sustituye la validación con las cargas externas relevantes medidas.
 
 ---
 
