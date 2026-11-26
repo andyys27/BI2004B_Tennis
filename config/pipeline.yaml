@@ -107,6 +107,7 @@ events:
   start_frac: 0.05
   end_frac: 0.20
   sequence_margin_s: 0.05
+  sequence_min_valid_frac: 0.5   # serie con <50 % de muestras válidas en la ventana -> sin pico (cadena incompleta)
   # Cadena próximo-distal (vista lateral): series cuyo pico se ordena en el tiempo.
   sequence:
     muslo: omega_seg_muslo
@@ -131,10 +132,24 @@ fatigue:
     elevacion_max_hombro: {column: theta_interior_hombro, stat: max, unit: rad, confidence: media}
     altura_max_muneca: {column: y_muneca_der, stat: max, unit: m, confidence: alta}
 
+# Cuerpo completo: centro de masa (fracciones de Winter, ver analysis/body.py), fuerza vertical
+# del suelo estimada F = m(a_CoM + g), posturas por evento, rango de movimiento y palancas.
+body:
+  com_cutoff_hz: 6.0           # filtro adicional del CoM antes de derivar dos veces
+  posture_events: [inicio, inicio_flexion_rodilla, max_flex_rodilla, impacto, fin]
+  lever_view: lateral
+  lever_events: [max_flex_rodilla, impacto]
+  lever_joints: [tobillo_der, rodilla_der, cadera_der, tobillo_izq, rodilla_izq, cadera_izq]
+
 inverse_dynamics:
   enabled: true
   view: lateral
-  # Supuestos exploratorios: sin GRF (fase aérea) y muñeca sin carga externa.
+  # Supuestos exploratorios: GRF estimada por el CoM (sin plataforma) y muñeca sin carga externa.
+  grf:
+    mode: com                  # com = F = m(a_CoM + g) | none = GRF 0 (fase aérea)
+    share: 0.5                 # fracción de la GRF en la pierna analizada (pies juntos en la carga)
+    cop_frac: 0.5              # centro de presión: fracción del vector tobillo -> punta
+    contact_bw: 0.2            # contacto si la GRF vertical de la pierna > 20 % de su parte del peso (ruido del CoM en vuelo)
   anthropometry:
     thigh_mass_fraction: 0.10
     shank_mass_fraction: 0.0465

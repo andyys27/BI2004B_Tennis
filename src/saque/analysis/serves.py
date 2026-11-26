@@ -78,7 +78,8 @@ def shift_impacts(impacts: pd.DataFrame, lag_s: float) -> pd.DataFrame:
     for c in ("t_impacto", "t_altura"):
         out[c] = out[c] + lag_s
     out["metodo"] = "sincronizado_desde_referencia"
-    return out
+    return out.drop(columns=[c for c in ("x_contacto_px", "y_contacto_px", "puntos_pelota")
+                             if c in out])
 
 
 def view_offset(ref: pd.DataFrame, other: pd.DataFrame) -> dict:

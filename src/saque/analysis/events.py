@@ -118,8 +118,13 @@ def time_normalize(t, y, t0: float, t1: float, n: int = 101) -> np.ndarray:
     return np.interp(np.linspace(t0, t1, n), np.asarray(t, float), np.asarray(y, float))
 
 
-def peak_times(series: dict[str, Series], window: tuple[float, float], use_abs: bool = True) -> dict:
-    """Tiempo y amplitud del pico de cada serie dentro de `window`."""
+def peak_times(series: dict[str, Series], window: tuple[float, float], use_abs: bool = True,
+               min_valid_frac: float = 0.0) -> dict:
+    """Tiempo y amplitud del pico de cada serie dentro de `window` (ignora huecos NaN).
+
+    `frac_valida` es la fracción de muestras finitas en la ventana; si es menor que
+    `min_valid_frac` la serie se omite (pico poco fiable).
+    """
     out = {}
     for label, (t, y) in series.items():
         t, y = np.asarray(t, float), np.asarray(y, float)
@@ -127,21 +132,48 @@ def peak_times(series: dict[str, Series], window: tuple[float, float], use_abs: 
         if not m.any():
             continue
         yy = np.abs(y[m]) if use_abs else y[m]
-        i = int(np.argmax(yy))
-        out[label] = dict(t=float(t[m][i]), amp=float(yy[i]))
+        ok = np.isfinite(yy)
+        frac = float(ok.mean())
+        if not ok.any() or frac < min_valid_frac:
+            continue
+        i = int(np.nanargmax(yy))
+        out[label] = dict(t=float(t[m][i]), amp=float(yy[i]), frac_valida=frac)
     return out
 
 
-def sequence_metrics(peaks: dict, order: list[str]) -> dict:
-    """Lags entre picos consecutivos (ms) y τ de Kendall frente al orden esperado (1 = orden perfecto).
+def observed_order(peaks: dict, labels: list[str], tie_ms: float = 1e-6) -> str:
+    """Orden temporal observado de los picos; picos simultáneos se unen con '='."""
+    items = sorted(labels, key=lambda l: peaks[l]["t"])
+    out = items[:1]
+    for prev, cur in zip(items, items[1:]):
+        sep = " = " if 1000 * abs(peaks[cur]["t"] - peaks[prev]["t"]) <= tie_ms else " > "
+        out.append(sep + cur)
+    return "".join(out)
+
+
+def sequence_metrics(peaks: dict, order: list[str], tie_ms: float = 1e-6) -> dict:
+    """Orden observado, lags entre picos consecutivos del orden esperado (ms; negativo = invertido)
+    y τ de Kendall frente al orden esperado (1 = orden perfecto, −1 = invertido).
 
     No se calculan razones de amplitud: las series tienen unidades distintas (rad/s vs m/s).
     """
     labels = [l for l in order if l in peaks]
     if len(labels) < 2:
-        return dict(labels=labels, lags_ms=[], tau=None, nota="se requieren >=2 series con pico")
+        return dict(labels=labels, observed="", lags_ms=[], tau=None, n_invertidos=None,
+                    nota="se requieren >=2 series con pico")
     times = [peaks[l]["t"] for l in labels]
     lags = [1000 * (times[i + 1] - times[i]) for i in range(len(times) - 1)]
-    tau = kendalltau(np.arange(len(times)), times)[0] if len(times) >= 3 else (1.0 if lags[0] > 0 else -1.0)
-    return dict(labels=labels, lags_ms=lags, tau=float(tau),
-                nota="cadena incompleta" if len(labels) < len(order) else "")
+    if len(set(times)) == 1:
+        tau = float("nan")
+    elif len(times) >= 3:
+        tau = float(kendalltau(np.arange(len(times)), times)[0])
+    else:
+        tau = 1.0 if lags[0] > 0 else -1.0
+    notas = []
+    if len(labels) < len(order):
+        notas.append("cadena incompleta: " + ", ".join(l for l in order if l not in peaks))
+    ties = sum(abs(x) <= tie_ms for x in lags)
+    if ties:
+        notas.append(f"{ties} pico(s) simultáneo(s)")
+    return dict(labels=labels, observed=observed_order(peaks, labels, tie_ms), lags_ms=lags, tau=tau,
+                n_invertidos=int(sum(x < -tie_ms for x in lags)), nota="; ".join(notas))

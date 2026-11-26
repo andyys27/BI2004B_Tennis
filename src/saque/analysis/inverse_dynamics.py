@@ -1,8 +1,12 @@
 """Dinámica inversa planar (Newton-Euler 2D) exploratoria por saque.
 
 Supuestos explícitos (no hay plataforma de fuerza ni medición de raqueta):
-- tren inferior (pie-pierna-muslo): GRF = 0 en todo el saque (fase aérea asumida); durante el
-  apoyo los momentos NO representan las cargas reales;
+- tren inferior (pie-pierna-muslo): GRF estimada a partir del centro de masa (sin plataforma),
+  `grf.mode: com`: F = m·(a_CoM − g) en x y z, repartida entre los dos pies con `grf.share`
+  (pies juntos en la carga del saque -> 0.5) y aplicada en un centro de presión fijo entre tobillo
+  y punta (`grf.cop_frac`). Contacto cuando la GRF vertical de esa pierna supera
+  `grf.contact_bw` del peso. Con `grf.mode: none` se usa GRF = 0 (fase aérea asumida). El
+  reparto entre pies y el CoP son supuestos: los momentos del apoyo son estimaciones exploratorias;
 - tren superior (brazo-antebrazo): fuerza externa nula en muñeca; mano, raqueta y pelota excluidas.
 Longitudes de segmento: mediana de la distancia entre marcadores del saque; masas, centros de
 masa y radios de giro: fracciones de Winter configuradas en `inverse_dynamics.anthropometry`.
@@ -279,13 +283,32 @@ def _valid_rows(kin: pd.DataFrame, cols: list[str]) -> np.ndarray:
     return np.isfinite(kin[cols].to_numpy(float)).all(axis=1)
 
 
+def estimated_grf(kin: pd.DataFrame, markers: pd.DataFrame, ankle: str, toe: str,
+                  body_mass_kg: float, share: float = 0.5, cop_frac: float = 0.5,
+                  gravity_m_s2: float = 9.81) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """GRF de una pierna estimada con el CoM: F = share·m·(a_CoM + g ẑ); CoP entre tobillo y punta.
+
+    Devuelve (grf_x, grf_z, cop_offset_from_ankle) con NaN donde falte el CoM o el pie.
+    """
+    if not 0 < share <= 1 or not 0 <= cop_frac <= 1:
+        raise ValueError("share debe estar en (0, 1] y cop_frac en [0, 1]")
+    gx = share * body_mass_kg * kin["ax_com"].to_numpy(float)
+    gz = share * body_mass_kg * (kin["ay_com"].to_numpy(float) + gravity_m_s2)
+    a = np.column_stack([markers[f"x_{ankle}"], markers[f"y_{ankle}"]]).astype(float)
+    b = np.column_stack([markers[f"x_{toe}"], markers[f"y_{toe}"]]).astype(float)
+    return gx, gz, cop_frac * (b - a)
+
+
 def run_serve_inverse_dynamics(kin: pd.DataFrame, markers: pd.DataFrame, view_cfg: dict,
                                body_mass_kg: float, anthropometry: dict,
-                               gravity_m_s2: float = 9.81) -> dict[str, pd.DataFrame]:
+                               gravity_m_s2: float = 9.81, grf: dict | None = None
+                               ) -> dict[str, pd.DataFrame]:
     """Calcula tren superior y tren inferior para un saque. Omite lo que no tenga marcadores.
 
-    `kin` y `markers` (filtrados, en m) deben compartir la malla temporal.
+    `kin` y `markers` (filtrados, en m) deben compartir la malla temporal. `grf` configura la
+    fuerza del suelo del tren inferior (ver docstring del módulo); None = GRF estimada por el CoM.
     """
+    grf = {"mode": "com", "share": 0.5, "cop_frac": 0.5, "contact_bw": 0.2, **(grf or {})}
     seg = view_cfg.get("segments", {})
     out: dict[str, pd.DataFrame] = {}
 
@@ -312,18 +335,32 @@ def run_serve_inverse_dynamics(kin: pd.DataFrame, markers: pd.DataFrame, view_cf
                     UpperLimb(segment("upper_arm", sh, el), segment("forearm", el, wr), gravity_m_s2))
                 out["tren_superior"] = res
 
-    # Tren inferior: pie-pierna-muslo con GRF=0.
+    # Tren inferior: pie-pierna-muslo con GRF estimada por el CoM (o GRF=0).
     if {"pie", "pierna", "muslo"} <= set(seg):
         ankle, toe = seg["pie"]
         knee, _ = seg["pierna"]
         hip, _ = seg["muslo"]
         cols = [f"{k}_seg_{s}" for s in ("pie", "pierna", "muslo") for k in ("theta", "omega", "alpha")]
         cols += [f"a{a}_{ankle}" for a in "xy"]
+        use_grf = grf["mode"] == "com" and {"ax_com", "ay_com"} <= set(kin)
+        if use_grf:
+            gx_all, gz_all, cop_all = estimated_grf(kin, markers, ankle, toe, body_mass_kg,
+                                                    grf["share"], grf["cop_frac"], gravity_m_s2)
         if set(cols) <= set(kin):
             ok = _valid_rows(kin, cols)
+            if use_grf:
+                ok &= np.isfinite(gx_all) & np.isfinite(gz_all) & np.isfinite(cop_all).all(axis=1)
             if ok.sum() >= 3:
                 k = kin.loc[ok]
                 n = len(k)
+                if use_grf:
+                    gx, gz, cop = gx_all[ok], gz_all[ok], cop_all[ok]
+                    thr = grf["contact_bw"] * body_mass_kg * gravity_m_s2 * grf["share"]
+                    mode = (f"GRF estimada por el CoM; {grf['share']:.0%} por pierna; CoP a "
+                            f"{grf['cop_frac']:.0%} tobillo->punta")
+                else:
+                    gx, gz, cop, thr = np.zeros(n), np.zeros(n), np.zeros((n, 2)), 20.0
+                    mode = "GRF=0; fase aérea asumida"
                 names = {"foot": "pie", "shank": "pierna", "thigh": "muslo"}
                 limb = LowerLimb(segment("foot", ankle, toe), segment("shank", knee, ankle),
                                  segment("thigh", hip, knee), gravity_m_s2)
@@ -332,7 +369,7 @@ def run_serve_inverse_dynamics(kin: pd.DataFrame, markers: pd.DataFrame, view_cf
                     {e: _seg_series(k, s, "theta") for e, s in names.items()},
                     {e: _seg_series(k, s, "omega") for e, s in names.items()},
                     {e: _seg_series(k, s, "alpha") for e, s in names.items()},
-                    np.zeros(n), np.zeros(n), np.zeros((n, 2)), _xy_accel(k, ankle), limb)
-                res["external_force_mode"] = "GRF=0; fase aérea asumida"
+                    gx, gz, cop, _xy_accel(k, ankle), limb, contact_threshold_n=thr)
+                res["external_force_mode"] = mode
                 out["tren_inferior"] = res
     return out

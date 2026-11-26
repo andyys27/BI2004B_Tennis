@@ -118,3 +118,64 @@ def bootstrap_spearman(x, y, *, n_boot: int = 5000, alpha: float = 0.05,
     return {"n": n, "rho": rho, "ic_inferior": float(low), "ic_superior": float(high),
             "muestras_bootstrap": len(samples),
             "nota": "exploratorio; IC bootstrap inestable con muestras pequeñas"}
+
+
+def joint_peaks(kin: pd.DataFrame, joints: list[str], t0: float, t1: float, t_ref: float,
+                kinds=("omega", "alpha")) -> pd.DataFrame:
+    """Pico absoluto de ω y α de cada articulación (`<kind>_interior_<j>`) en [t0, t1].
+
+    Ignora huecos; `frac_valida` indica cuánta ventana tenía datos. t_rel en ms respecto a t_ref.
+    """
+    m = (kin["time_s"] >= t0) & (kin["time_s"] <= t1)
+    t = kin.loc[m, "time_s"].to_numpy(float)
+    rows = []
+    for j in joints:
+        for kind in kinds:
+            col = f"{kind}_interior_{j}"
+            if col not in kin:
+                continue
+            y = np.abs(kin.loc[m, col].to_numpy(float))
+            ok = np.isfinite(y)
+            if not ok.any():
+                continue
+            i = int(np.nanargmax(y))
+            rows.append(dict(articulacion=j, magnitud=kind, pico_abs=float(y[i]),
+                             unidad="rad/s" if kind == "omega" else "rad/s²",
+                             t_rel_impacto_ms=1000 * (t[i] - t_ref), frac_valida=float(ok.mean())))
+    return pd.DataFrame(rows)
+
+
+def spearman_matrix(wide: pd.DataFrame, min_n: int = 4) -> pd.DataFrame:
+    """ρ de Spearman y p para cada par de columnas de `wide` (filas = saques), formato largo.
+
+    Descriptivo: con n = 5 un |ρ| = 0.9 tiene p ≈ 0.04 y uno de 0.7 no es distinguible de 0.
+    """
+    cols = [c for c in wide if wide[c].notna().sum() >= min_n and wide[c].nunique() > 1]
+    rows = []
+    for i, a in enumerate(cols):
+        for b in cols[i + 1:]:
+            d = wide[[a, b]].dropna()
+            if len(d) < min_n or d[a].nunique() < 2 or d[b].nunique() < 2:
+                continue
+            r = spearmanr(d[a], d[b])
+            rows.append(dict(var_a=a, var_b=b, n=len(d), rho=float(r.statistic), p=float(r.pvalue)))
+    return pd.DataFrame(rows)
+
+
+def qc_summary(qc_log: pd.DataFrame) -> pd.DataFrame:
+    """Muestras anuladas por vista y tipo de control, a partir de `qc_log`.
+
+    Dos formatos de registro: resumen ("tronco: 148 fotogramas a NaN") o una fila por muestra
+    (columna `indice`, p. ej. `salto_tracking`). Los registros de `huecos` describen la
+    interpolación de huecos ya existentes, no anulaciones, y no se cuentan.
+    """
+    if qc_log.empty or "accion" not in qc_log:
+        return pd.DataFrame(columns=["vista", "tipo", "muestras"])
+    d = qc_log[qc_log["tipo"] != "huecos"]
+    n = pd.to_numeric(d["accion"].astype(str).str.extract(r"(\d+)\s+(?:fotogramas|muestras)")[0],
+                      errors="coerce")
+    if "indice" in d:
+        n = n.where(n.notna() | d["indice"].isna(), 1.0)          # una fila = una muestra
+    d = d.assign(muestras=n).dropna(subset=["muestras"])
+    return (d.groupby(["archivo", "tipo"])["muestras"].sum().reset_index()
+            .rename(columns={"archivo": "vista"}))

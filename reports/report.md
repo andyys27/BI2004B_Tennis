@@ -3,10 +3,10 @@
 Generado automáticamente por `saque run`. Cinemática 2D por vista; todas las asociaciones y tendencias entre saques son exploratorias (n = 5 saques, una jugadora).
 
 ## 1. Datos y calibración
-| vista | metodo | m_por_px | px_por_m | estatura_aparente_m | estatura_real_m | fps | n_fotogramas | fotogramas_perdidos | frac_detectado |
-|---|---|---|---|---|---|---|---|---|---|
-| lateral | ground_plane | 0.00167 | 599 | 1.58 | 1.64 | 120 | 5414 | 24 | 0.996 |
-| posterior | ground_plane | 0.00151 | 662 | 1.59 | 1.64 | 120 | 5588 | 15 | 0.997 |
+| vista | metodo | m_por_px | px_por_m | origen_x_px | origen_y_px | estatura_aparente_m | estatura_real_m | fps | n_fotogramas | fotogramas_perdidos | frac_detectado |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| lateral | ground_plane | 0.00167 | 599 | 443 | 1.78e+03 | 1.58 | 1.64 | 120 | 5414 | 24 | 0.996 |
+| posterior | ground_plane | 0.00151 | 662 | 768 | 1.6e+03 | 1.59 | 1.64 | 120 | 5588 | 15 | 0.997 |
 
 ## 2. Origen de los marcadores
 Cada marcador usa el centroide de la estampita cuando se detecta y, si no, el landmark de MediaPipe corregido por el desfase mediano estampita-landmark.
@@ -67,19 +67,83 @@ Sincronización entre vistas: t_vista = t_referencia + lag_s (por correlación d
 | posterior | 4 | 284 | 433 | 390 |
 | posterior | 5 | 268 | 441 | 398 |
 
-## 5. Secuencia próximo-distal
-τ de Kendall = 1 indica picos en el orden esperado.
+![fases](figures/fases.png)
 
-| vista | saque | orden | tau_kendall | nota | lags_ms |
-|---|---|---|---|---|---|
-| lateral | 1 | muslo > tronco > brazo > codo > muneca | 0 | nan | -275;0;0;275 |
-| lateral | 2 | muslo > tronco > brazo > codo > muneca | 0.949 | nan | 0;33;8;58 |
-| lateral | 3 | muslo > tronco > brazo > codo > muneca | 0.738 | nan | 92;-42;200;0 |
-| lateral | 4 | muslo > tronco > brazo > codo > muneca | 0.632 | nan | 0;0;0;100 |
-| lateral | 5 | muslo > tronco > brazo > codo > muneca | 0.6 | nan | -208;250;141;-75 |
+## 5. Secuencia próximo-distal
+Pico de |ω| (o rapidez de muñeca) de cada segmento entre el inicio y 50 ms después del impacto, ignorando huecos; una serie con menos del 50 % de muestras válidas en la ventana se omite. `orden_observado` ordena los picos en el tiempo ('=' = mismo fotograma). `lags_ms` son las diferencias entre picos consecutivos del orden esperado (negativo = invertido). τ de Kendall = 1 indica el orden esperado.
+
+| vista | saque | orden_observado | tau_kendall | n_invertidos | lags_ms | nota |
+|---|---|---|---|---|---|---|
+| lateral | 1 | tronco > codo > brazo > muneca > muslo | 0 | 2 | -441;350;-33;83 | nan |
+| lateral | 2 | muslo = tronco > brazo = codo > muneca | 0.894 | 0 | 0;42;0;58 | 2 pico(s) simultáneo(s) |
+| lateral | 3 | muslo > tronco > brazo = codo = muneca | 0.837 | 0 | 92;158;0;0 | 2 pico(s) simultáneo(s) |
+| lateral | 4 | brazo = codo > muslo > muneca > tronco | -0.105 | 1 | 250;-258;0;108 | 1 pico(s) simultáneo(s) |
+| lateral | 5 | tronco > muslo > codo > brazo > muneca | 0.6 | 2 | -208;266;-8;58 | nan |
+
+![secuencia](figures/secuencia_cinematica.png)
 
 ## 6. Curvas por saque (inicio → impacto)
 ![curvas](figures/curvas_por_saque.png)
+
+## 6b. Cinemática angular θ, ω, α por articulación (vista lateral)
+Ángulos interiores (180° = articulación extendida), normalizados de inicio a impacto. La banda gris es la media ± DE de los 5 saques. α es la segunda derivada del ángulo filtrado y es la magnitud más ruidosa.
+
+![θωα](figures/cinematica_articular.png)
+
+Picos de |ω| y |α| entre inicio e impacto (media ± DE de los saques; tiempo mediano respecto al impacto):
+
+| vista | articulacion | magnitud | unidad | media | de | t_rel_impacto_ms | frac_valida |
+|---|---|---|---|---|---|---|---|
+| lateral | cadera | alpha | rad/s² | 547 | 99.3 | -292 | 0.97 |
+| lateral | cadera | omega | rad/s | 9.25 | 2.22 | -167 | 0.97 |
+| lateral | codo | alpha | rad/s² | 3.59e+03 | 2.33e+03 | -150 | 0.951 |
+| lateral | codo | omega | rad/s | 37.8 | 18.8 | -142 | 0.951 |
+| lateral | hombro | alpha | rad/s² | 3.48e+03 | 2.48e+03 | -158 | 0.946 |
+| lateral | hombro | omega | rad/s | 31.3 | 17.5 | -41.9 | 0.946 |
+| lateral | rodilla | alpha | rad/s² | 394 | 138 | -100 | 0.992 |
+| lateral | rodilla | omega | rad/s | 9.6 | 0.602 | -192 | 0.992 |
+| lateral | tobillo | alpha | rad/s² | 838 | 263 | -41.9 | 0.992 |
+| lateral | tobillo | omega | rad/s | 13.8 | 11 | -42 | 0.992 |
+| posterior | codo | alpha | rad/s² | 680 | 301 | -59.5 | 0.527 |
+| posterior | codo | omega | rad/s | 18.5 | 10.5 | -67.8 | 0.527 |
+| posterior | rodilla | alpha | rad/s² | 358 | 64.7 | -143 | 0.958 |
+| posterior | rodilla | omega | rad/s | 5.85 | 1.14 | -209 | 0.958 |
+| posterior | rodilla_izq | alpha | rad/s² | 731 | 185 | -184 | 0.82 |
+| posterior | rodilla_izq | omega | rad/s | 6.85 | 0.45 | -850 | 0.82 |
+
+## 6c. Consistencia entre saques
+DE entre saques a lo largo del gesto y RMSD de cada saque respecto a la curva media (ángulos, °). Un saque con RMSD alto en todas las articulaciones fue técnicamente distinto del resto.
+
+| variable | saque_1 | saque_2 | saque_3 | saque_4 | saque_5 |
+|---|---|---|---|---|---|
+| theta_cadera | 5.0 | 3.4 | 3.2 | 3.5 | 2.7 |
+| theta_codo | 13.3 | 7.6 | 8.2 | 9.2 | 7.5 |
+| theta_hombro | 9.0 | 5.6 | 8.2 | 6.4 | 6.0 |
+| theta_incl_tronco | 4.3 | 2.4 | 3.0 | 4.9 | 2.3 |
+| theta_rodilla | 7.3 | 3.0 | 1.5 | 4.1 | 3.7 |
+| theta_tobillo | 9.6 | 3.1 | 2.4 | 4.1 | 4.9 |
+
+![variabilidad](figures/variabilidad_saques.png)
+
+## 6d. Asociaciones entre indicadores por saque
+ρ de Spearman entre los indicadores de la sección 7 y las variables del centro de masa. Con n = 5 solo |ρ| = 1 (o 0.9) llega a p < 0.05; se reporta como descripción, sin corrección por comparaciones múltiples y sin interpretación causal.
+
+Diez pares con mayor |ρ|:
+
+| var_a | var_b | n | rho | p |
+|---|---|---|---|---|
+| elevacion_max_com_m | altura_contacto_m | 5 | 0.9 | 0.0374 |
+| duracion_aceleracion | elevacion_max_com_m | 5 | -0.9 | 0.0374 |
+| duracion_aceleracion | duracion_carga | 5 | -0.9 | 0.0374 |
+| altura_max_muneca | elevacion_max_com_m | 5 | 0.9 | 0.0374 |
+| duracion_carga | elevacion_max_com_m | 5 | 0.8 | 0.104 |
+| duracion_aceleracion | altura_contacto_m | 5 | -0.8 | 0.104 |
+| altura_max_muneca | rapidez_pico_muneca | 5 | 0.8 | 0.104 |
+| altura_max_muneca | duracion_aceleracion | 5 | -0.7 | 0.188 |
+| flexion_max_rodilla | vy_max_com_m_s | 5 | 0.7 | 0.188 |
+| rapidez_pico_muneca | grf_pico_bw | 5 | -0.7 | 0.188 |
+
+![correlaciones](figures/correlaciones.png)
 
 ## 7. Indicadores de posible fatiga
 Pendiente por saque, cambio del primer al último saque y ρ de Spearman con IC95 % bootstrap. Con 5 saques los intervalos son amplios: una tendencia es una señal a confirmar, no una prueba de fatiga (también puede reflejar cambios de intención o técnica).
@@ -118,15 +182,141 @@ Confianza: *alta* = posiciones, ángulos y tiempos; *baja* = picos de velocidad 
 | lateral | 4 | 0.205 | 0.228 | 0.198 | 0.227 | 0.0713 | 0.903 | 6.17 |
 | lateral | 5 | 0.206 | 0.227 | 0.193 | 0.196 | 0.111 | 0.853 | 6.48 |
 
+![jacobiano_validacion](figures/jacobiano_validacion.png)
+
 ![jacobiano_lateral](figures/jacobiano_lateral.png)
 
 ![dinamica_inversa_tren_superior_lateral](figures/dinamica_inversa_tren_superior_lateral.png)
 
 ![dinamica_inversa_tren_inferior_lateral](figures/dinamica_inversa_tren_inferior_lateral.png)
 
-## 9. Limitaciones
+## 9. Cuerpo completo: centro de masa, salto y fuerza del suelo estimada
+Fuerza vertical estimada F = m(a_CoM + g) (suma de ambos pies). Fin del impulso = máxima velocidad vertical del CoM. El tiempo de vuelo no se reporta: con marcadores 2D la altura de los pies no es fiable.
+
+| vista | saque | altura_contacto_m | elevacion_max_com_m | vy_max_com_m_s | grf_pico_bw | impulso_neto_Ns | v_por_impulso_m_s | separacion_tobillos_inicio_m | separacion_tobillos_carga_m | desplazamiento_x_com_m |
+|---|---|---|---|---|---|---|---|---|---|---|
+| lateral | 1 | 2.09 | 0.155 | 1.23 | 2.12 | 76.2 | 1.31 | 0.439 | 0.031 | 0.254 |
+| lateral | 2 | 2.14 | 0.162 | 1.91 | 2.71 | 123 | 2.12 | 0.453 | 0.00715 | 0.322 |
+| lateral | 3 | 2.18 | 0.181 | 1.95 | 2.89 | 127 | 2.19 | 0.468 | 0.00988 | 0.347 |
+| lateral | 4 | 2.09 | 0.141 | 1.87 | 3.64 | 128 | 2.21 | 0.477 | 0.0279 | 0.536 |
+| lateral | 5 | 2.13 | 0.15 | 2.01 | 3.27 | 133 | 2.3 | 0.483 | 0.018 | 0.459 |
+| posterior | 1 | nan | 0.214 | 1.26 | nan | 0 | 0 | 0.301 | 0.108 | -0.313 |
+| posterior | 2 | nan | 0.202 | 0.883 | 1.18 | 2.35 | 0.0405 | 0.285 | nan | -0.312 |
+| posterior | 3 | nan | 0.21 | 0.909 | 2.05 | 28.6 | 0.493 | 0.314 | nan | -0.292 |
+| posterior | 4 | nan | 0.213 | 0.998 | 2.28 | 25.3 | 0.436 | 0.302 | nan | -0.421 |
+| posterior | 5 | nan | 0.209 | 1.01 | 2.01 | 31.4 | 0.541 | 0.313 | nan | -0.357 |
+
+![com_fuerza_suelo](figures/com_fuerza_suelo.png)
+
+![trayectorias](figures/trayectorias.png)
+
+## 10. Ángulos en los eventos (media de los saques, °)
+| vista | variable | fin | impacto | inicio | inicio_flexion_rodilla | max_flex_rodilla |
+|---|---|---|---|---|---|---|
+| lateral | theta_incl_tronco | 32 | 25 | -19 | -4 | 18 |
+| lateral | theta_interior_cadera | 152 | 151 | 169 | 170 | 161 |
+| lateral | theta_interior_codo | 130 | 163 | 168 | 124 | 54 |
+| lateral | theta_interior_hombro | 22 | 123 | 31 | 73 | 41 |
+| lateral | theta_interior_rodilla | 52 | 160 | 171 | 172 | 105 |
+| lateral | theta_interior_tobillo | 117 | 152 | 117 | 112 | 116 |
+| posterior | theta_incl_linea_caderas | 60 | -13 | -20 | -31 | -30 |
+| posterior | theta_incl_linea_hombros | 148 | 59 | 15 | -26 | -37 |
+| posterior | theta_incl_tronco | 51 | 28 | 4 | -16 | -25 |
+| posterior | theta_interior_codo | 112 | 162 | 176 | 95 | 24 |
+| posterior | theta_interior_rodilla | 70 | 169 | 175 | 179 | 148 |
+| posterior | theta_interior_rodilla_izq | 135 | 174 | 170 | 175 | nan |
+| posterior | theta_sep_hombros_caderas | 131 | 67 | 34 | 4 | -7 |
+
+![posturas_lateral](figures/posturas_lateral.png)
+
+![posturas_posterior](figures/posturas_posterior.png)
+
+![plano_frontal_posterior](figures/plano_frontal_posterior.png)
+
+## 11. Rango de movimiento inicio → impacto (°)
+| vista | variable | mean | std |
+|---|---|---|---|
+| lateral | theta_incl_tronco | 55.8 | 5.8 |
+| lateral | theta_interior_cadera | 39.3 | 5.6 |
+| lateral | theta_interior_codo | 135.8 | 11.1 |
+| lateral | theta_interior_hombro | 146.4 | 19.8 |
+| lateral | theta_interior_rodilla | 74.7 | 1.2 |
+| lateral | theta_interior_tobillo | 72.7 | 5.8 |
+| posterior | theta_incl_linea_caderas | 48.6 | 8.5 |
+| posterior | theta_incl_linea_hombros | 100.5 | 4.6 |
+| posterior | theta_incl_tronco | 53.0 | 1.2 |
+| posterior | theta_interior_codo | 151.6 | 5.1 |
+| posterior | theta_interior_rodilla | 33.1 | 5.4 |
+| posterior | theta_interior_rodilla_izq | 16.4 | 4.4 |
+| posterior | theta_sep_hombros_caderas | 74.8 | 4.2 |
+
+![rom](figures/rango_movimiento.png)
+
+## 12. Brazos de palanca del peso corporal (media de los saques)
+Distancia horizontal de la articulación a la vertical por el CoM; momento estático = m·g·brazo (sin fuerzas inerciales ni musculares).
+
+| evento | articulacion | brazo_palanca_m | momento_peso_Nm |
+|---|---|---|---|
+| impacto | cadera_der | -0.104 | -59.1 |
+| impacto | cadera_izq | 0.0143 | 8.14 |
+| impacto | rodilla_der | -0.0713 | -40.6 |
+| impacto | rodilla_izq | -0.0394 | -22.4 |
+| impacto | tobillo_der | -0.175 | -99.3 |
+| impacto | tobillo_izq | -0.0367 | -20.9 |
+| max_flex_rodilla | cadera_der | 0.0327 | 18.6 |
+| max_flex_rodilla | cadera_izq | -0.0854 | -48.6 |
+| max_flex_rodilla | rodilla_der | -0.192 | -109 |
+| max_flex_rodilla | rodilla_izq | -0.208 | -118 |
+| max_flex_rodilla | tobillo_der | 0.0162 | 9.21 |
+| max_flex_rodilla | tobillo_izq | 0.00419 | 2.38 |
+
+![palancas](figures/palancas_lateral.png)
+
+## 13. Picos de dinámica inversa y potencia articular (exploratorio)
+Tren inferior con GRF estimada por el CoM, F = m(a_CoM + g), 50 % por pierna (pies juntos en la carga) y centro de presión fijo a mitad del pie; picos entre el inicio de la flexión de rodilla y el despegue (máx. velocidad vertical del CoM). Tren superior con la muñeca libre (sin raqueta): los picos del hombro están inflados por la doble derivada del brazo de golpeo. La potencia de cadera sale negativa en el empuje: el tronco rota hacia atrás (arco del saque kick) contra un momento flexor estimado; depende del supuesto del centro de presión.
+
+| parte | variable | unidad | median | min | max |
+|---|---|---|---|---|---|
+| tren_inferior | P_ankle_W | W | 98.9 | 52.9 | 133.7 |
+| tren_inferior | P_hip_W | W | 497.4 | 357.9 | 1602.9 |
+| tren_inferior | P_knee_W | W | 784.0 | 551.3 | 1481.8 |
+| tren_inferior | T_ankle_Nm | N·m | 28.7 | 21.7 | 52.8 |
+| tren_inferior | T_hip_Nm | N·m | 116.0 | 95.6 | 185.2 |
+| tren_inferior | T_knee_Nm | N·m | 158.8 | 119.7 | 198.4 |
+| tren_superior | P_elbow_W | W | 91.3 | 41.8 | 148.0 |
+| tren_superior | P_shoulder_W | W | 2065.6 | 26.0 | 5400.3 |
+| tren_superior | T_elbow_Nm | N·m | 4.3 | 3.3 | 14.9 |
+| tren_superior | T_shoulder_Nm | N·m | 38.9 | 7.6 | 210.6 |
+
+![picos](figures/dinamica_inversa_picos.png)
+
+## 13b. Filtrado y control de calidad
+Butterworth de orden 2 sin desfase; la fc de cada marcador sale del análisis de residuos de Winter (punto: fc elegida, donde R(fc) cruza la extrapolación del ruido).
+
+| vista | min | median | max |
+|---|---|---|---|
+| lateral | 5.0 | 8.8 | 9.4 |
+| posterior | 7.3 | 8.8 | 9.7 |
+
+![residuos](figures/filtrado_residuos.png)
+
+Muestras anuladas por cada control (suma sobre marcadores o segmentos):
+
+| vista | tipo | muestras |
+|---|---|---|
+| lateral | longitud_segmento | 854 |
+| lateral | omega_implausible | 22 |
+| lateral | rapidez_imposible | 885 |
+| lateral | salto_tracking | 1199 |
+| posterior | longitud_segmento | 1424 |
+| posterior | rapidez_imposible | 347 |
+| posterior | salto_tracking | 936 |
+
+![qc](figures/qc_resumen.png)
+
+## 14. Limitaciones
 - 2D por vista: los ángulos son proyecciones en el plano de cada cámara.
 - Escala: vara de 1 m corregida por profundidad suponiendo cámara nivelada a 1.30 m (ver estatura aparente en la tabla de calibración); escala fija por vista aunque la jugadora se mueve en profundidad. Los ángulos y tiempos no dependen de la escala.
 - El impacto es un proxy (máxima rapidez de muñeca cerca de su altura máxima); no se rastrean raqueta ni pelota.
-- Dinámica inversa exploratoria: GRF = 0 y muñeca sin carga externa.
+- Dinámica inversa exploratoria: GRF estimada por el CoM (sin plataforma; reparto 50/50 entre pies y centro de presión supuestos) y muñeca sin carga externa.
 - MediaPipe pierde precisión en el brazo de golpeo a alta velocidad; las estampitas reducen el problema solo donde se detectan.

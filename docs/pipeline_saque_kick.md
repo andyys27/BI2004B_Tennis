@@ -160,8 +160,17 @@ cada hueco** porque los bordes del filtro y de la derivada producían picos espu
 - **Eventos**: inicio (rapidez de muñeca > 5 % del pico), inicio de flexión de rodilla, máxima
   flexión de rodilla, pico de ω del codo, impacto y fin (rapidez < 20 % del pico). Fases: carga,
   aceleración y seguimiento.
-- **Secuencia próximo-distal** (solo con la cadena completa, vista lateral): orden de los picos de
-  muslo → tronco → brazo → codo → muñeca, con τ de Kendall.
+- **Secuencia próximo-distal** (vista lateral): pico de |ω| (o rapidez de muñeca) de muslo → tronco
+  → brazo → codo → muñeca entre el inicio y `sequence_margin_s` después del impacto. Usa `nanargmax`,
+  y una serie con menos de `sequence_min_valid_frac` (50 %) de muestras válidas se omite. Se reportan
+  el orden observado (`=` = mismo fotograma), los desfases en el orden esperado (negativo = invertido),
+  el número de inversiones y el τ de Kendall.
+- **Picos articulares** (`stats.joint_peaks`): |ω| y |α| máximos de cada articulación entre el inicio
+  y el impacto, con su tiempo respecto al impacto y la fracción de muestras válidas.
+- **Curvas θ/ω/α** (`curvas_articulares.csv`): normalizadas de 0 a 100 % (inicio → impacto). Incluyen
+  la banda media ± DE y el RMSD de cada saque respecto a la media.
+- **Asociaciones** (`stats.spearman_matrix`): ρ de Spearman entre los indicadores por saque y las
+  variables del CoM. Es descriptivo y no corrige por comparaciones múltiples.
 
 ---
 
@@ -198,6 +207,23 @@ son válidas, el pico de ese saque se excluye. El valor original se conserva en 
 
 ---
 
+## 6b. Cuerpo completo (`analysis/body.py`)
+
+| Análisis | Método | Control / limitación |
+|---|---|---|
+| Centro de masa | Media ponderada de 15 segmentos (fracciones de Winter); pesos renormalizados si falta un segmento (se descarta si falta > 20 % de la masa) | De pie: CoM ≈ 1.0 m |
+| Fuerza vertical del suelo | F = m(a_CoM + g), con el CoM filtrado a 6 Hz | De pie = 1.00–1.02 × peso. Cerca del impacto no es confiable (brazo) |
+| Impulso de piernas | Desde la máxima flexión de rodilla hasta la máxima velocidad vertical del CoM: pico de fuerza, impulso neto y v = impulso/m | v por impulso frente a v medida |
+| Elevación del CoM | Máximo en impacto ± 0.3 s menos la altura en la postura inicial | Lateral 0.14–0.18 m, posterior 0.21 m (escala) |
+| Tiempo de vuelo | **No se reporta** | La altura 2D de los pies no es confiable (pie sin estampita, pierna trasera elevada, desplazamiento en profundidad) |
+| Altura de contacto | Posición de la pelota al fin de su caída, convertida con la calibración | Solo en la vista donde se siguió la pelota |
+| Base de apoyo | Separación horizontal entre tobillos al inicio y en la carga | |
+| Ángulos por evento | Valor en inicio, inicio de carga, máxima flexión de rodilla, impacto y fin | |
+| Rango de movimiento | Mínimo y máximo de inicio a impacto | Después del impacto la rotación del cuerpo vuelve ambiguos los ángulos 2D |
+| Vista frontal | Inclinación de las líneas de hombros y caderas (periodo 180°, continuas por bloques), diferencia hombros − caderas e inclinación lateral del tronco | Se anulan cuando la línea proyectada mide menos del 50 % de su p95 (cuerpo de perfil) |
+| Palancas | Distancia horizontal de cada articulación a la vertical por el CoM; momento estático = m·g·brazo | Cualitativo: sin fuerzas inerciales ni musculares |
+| Potencia articular | P = M·(ω_distal − ω_proximal) sobre los momentos de la dinámica inversa | Exploratoria |
+
 ## 7. Jacobiano y dinámica inversa
 
 - **Jacobiano** `v = v_hombro + J(θ)ω` (brazo planar de 2 eslabones, vista lateral). La validación
@@ -206,10 +232,22 @@ son válidas, el pico de ese saque se excluye. El valor original se conserva en 
   cámara.
 - **Dinámica inversa** (vista lateral, por saque):
   - tren superior: hombro y codo, con la muñeca libre;
-  - tren inferior: pie, pierna y muslo con GRF = 0.
+  - tren inferior: pie, pierna y muslo con **GRF estimada por el centro de masa**
+    (`inverse_dynamics.grf`). Las componentes son F_x = m·a_x,CoM y F_z = m·(a_z,CoM + g). Se
+    asigna el 50 % a la pierna analizada, porque en la carga del saque los pies quedan juntos
+    (0.01–0.03 m). El centro de presión se fija a mitad de camino entre el tobillo y la punta. Hay
+    contacto cuando la GRF vertical de la pierna supera el 20 % de su parte del peso;
+    `grf.mode: none` vuelve a GRF = 0.
+  - Los picos se buscan entre el inicio y el impacto (+50 ms). En el tren inferior, la ventana va del
+    inicio de la flexión de rodilla al despegue (máxima velocidad vertical del CoM). Antes, con los
+    pies separados, el reparto 50/50 vertical no vale. Después, en el aire o en el aterrizaje sobre
+    un pie, la GRF estimada es ruido del CoM.
 
   Las fracciones antropométricas de Winter están en la configuración y las longitudes salen de la
-  mediana de cada saque. **No representan cargas reales:** sin GRF, sin raqueta y con escorzo.
+  mediana de cada saque. **Son estimaciones exploratorias:** la GRF no se mide, el reparto entre pies
+  y el centro de presión son supuestos, no hay raqueta y hay escorzo. La potencia de cadera sale
+  negativa durante el empuje: el tronco rota hacia atrás (el arco del saque kick) contra un momento
+  flexor estimado. Puede ser control excéntrico real, pero depende del centro de presión supuesto.
 
 ---
 
@@ -239,11 +277,14 @@ son válidas, el pico de ese saque se excluye. El valor original se conserva en 
 | `tables/fatiga_*.csv` | valores por saque, tendencias, índice |
 | `tables/curvas_normalizadas.csv`, `variabilidad_*.csv` | curvas 0–100 % y variabilidad entre saques |
 | `tables/jacobian_metrics.csv`, `descriptives.csv`, `filtros.csv`, `qc_log.csv` | validación y trazabilidad |
+| `tables/picos_articulares.csv`, `curvas_articulares.csv`, `variabilidad_*_articular.csv` | θ/ω/α por articulación y consistencia |
+| `tables/correlaciones.csv` | ρ de Spearman entre indicadores por saque |
+| `tables/residuos_winter.csv`, `qc_resumen.csv` | curvas R(fc) del filtrado y muestras anuladas por control |
 | `data/processed/<vista>/saque_XX/` | cinemática, Jacobiano y dinámica inversa por saque |
-| `figures/` | detección de saques, impactos con esqueleto, fuentes, curvas, fatiga, Jacobiano, dinámica inversa |
+| `figures/` | detección de saques, impactos con esqueleto, fuentes, fases, secuencia cinemática, θ/ω/α, variabilidad, correlaciones, curvas, fatiga, Jacobiano y su validación, residuos de Winter, QC, dinámica inversa |
 
 ## 10. Pruebas
-`pytest`: 41 pruebas con datos sintéticos, sin video:
+`pytest`: 63 pruebas con datos sintéticos, sin video:
 - estampitas y malla temporal con fotogramas perdidos;
 - calibración, fusión y duplicados, y controles de QC;
 - filtrado por tramos y recorte de bordes;
