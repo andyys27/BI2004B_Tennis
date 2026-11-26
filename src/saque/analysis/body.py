@@ -98,7 +98,8 @@ def com_serve_metrics(ck: pd.DataFrame, t_ini: float, t_load: float, t_impact: f
                       body_mass_kg: float, setup_s: float = 0.3, peak_window_s: float = 0.3) -> dict:
     """Elevación del CoM, velocidad vertical máxima e impulso de piernas de un saque.
 
-    - Referencia: altura mediana del CoM en los primeros `setup_s` de la ventana (postura inicial).
+    - Referencia: altura mediana del CoM en los `setup_s` que siguen a `t_ini` (el pipeline pasa
+      los 0.3 s de quietud previos al inicio del gesto).
     - Elevación máxima: máximo del CoM en impacto ± `peak_window_s` menos la referencia.
     - Fin del impulso: instante de máxima velocidad vertical del CoM entre la máxima flexión de
       rodilla (`t_load`) y el pico del CoM (aproxima el despegue).

@@ -18,7 +18,7 @@ pip install -e ".[dev]"          # requiere ffmpeg/ffprobe en el PATH
 saque run                        # pipeline completo (MediaPipe ~5 min por video; queda en caché)
 saque run --stages kinematics serves analysis report    # sin repetir MediaPipe
 saque calibrate lateral          # fotograma con rejilla para medir la vara de 1 m
-pytest                           # 63 pruebas con datos sintéticos (sin video)
+pytest                           # 62 pruebas con datos sintéticos (sin video)
 ```
 
 Sin instalar: `python scripts/run_pipeline.py [--stages ...]`.
@@ -60,6 +60,9 @@ docs/          contexto del proyecto y documento maestro del pipeline
 | `report` | Figuras y `reports/report.md`. |
 
 Detalle de métodos, decisiones y limitaciones: [`docs/pipeline_saque_kick.md`](docs/pipeline_saque_kick.md).
+Relación entre el modelo de segmentos rígidos y la mecánica del sólido continuo (qué representan
+los momentos articulares y qué haría falta para estimar cargas en los tejidos):
+[`docs/solido_continuo.md`](docs/solido_continuo.md).
 
 ## Resultados (corrida del 26-nov-2026)
 
@@ -114,19 +117,30 @@ En la vista posterior: cadera izq. 91 %, rodilla izq. 86 %, tobillos 64 % y 51 %
 
 ![Fases por saque](docs/img/fases.png)
 
+**Eventos y fases:**
+- **Inicio:** fin de la última quietud de la muñeca (≥ 0.1 s por debajo del 5 % de su pico) antes de
+  la flexión de rodilla, a 2.26–2.36 s del impacto.
+- **Preparación** (lanzamiento y armado): del inicio al inicio de la flexión de rodilla; dura
+  1.26–1.36 s.
+- **Carga, aceleración y seguimiento:** como antes.
+- **Vista posterior:** usa los eventos de la lateral trasladados con el desfase de 0.64 s, porque los
+  suyos no eran confiables.
+- **Corrección del 26-nov-2026:** antes la ventana empezaba 1.6 s antes del impacto y el "inicio" era
+  ese borde, con el lanzamiento ya en curso. La ventana ahora empieza 3 s antes.
+
 Pico de |ω| de cada segmento (o rapidez de la muñeca) entre el inicio y 50 ms después del impacto.
 Los huecos se ignoran, y una serie con menos del 50 % de muestras válidas se omite.
 
 | Saque | Orden observado | τ |
 |---|---|---|
-| 1 | tronco > codo > brazo > muñeca > muslo | 0.00 |
+| 1 | brazo > tronco > codo > muñeca > muslo | 0.00 |
 | 2 | muslo = tronco > brazo = codo > muñeca | 0.89 |
 | 3 | muslo > tronco > brazo = codo = muñeca | 0.84 |
 | 4 | brazo = codo > muslo > muñeca > tronco | −0.11 |
 | 5 | tronco > muslo > codo > brazo > muñeca | 0.60 |
 
-- Los saques 2 y 3 siguen el orden próximo-distal. En el 1 y el 4 el pico del muslo o del tronco cae
-  en el borde de la ventana o después del impacto, que es la parte con más huecos.
+- Los saques 2 y 3 siguen el orden próximo-distal. En el 1 el pico del muslo cae después del
+  impacto, y en el 4 el del tronco; es la parte con más huecos.
 - El brazo y el codo suelen alcanzar su pico en el mismo fotograma. En 2D no se pueden separar bien.
 - Corrección del 26-nov-2026: antes la tabla imprimía el orden *esperado* en lugar del observado, y
   `argmax` sobre series con huecos tomaba el primer NaN como pico.
@@ -137,7 +151,7 @@ Los huecos se ignoran, y una serie con menos del 50 % de muestras válidas se om
 
 ![Cinemática angular por articulación](docs/img/cinematica_articular.png)
 
-- Picos de |ω| entre el inicio y el impacto (media ± DE): codo 38 ± 19 rad/s, hombro 31 ± 18,
+- Picos de |ω| entre el inicio y el impacto (media ± DE): codo 38 ± 19 rad/s, hombro 32 ± 17,
   tobillo 14 ± 11, rodilla 9.6 ± 0.6 y cadera 9.3 ± 2.2. Rodilla y cadera son muy repetibles; los
   picos del brazo dependen del QC cerca del impacto (ver `reports/tables/picos_articulares.csv`).
 - **Consistencia:** la variabilidad entre saques sube en el armado del codo (20–50 %) y justo antes del
@@ -152,8 +166,8 @@ Los huecos se ignoran, y una serie con menos del 50 % de muestras válidas se om
 
 ### Jacobiano, filtrado y control de calidad
 
-- **Jacobiano:** J(θ)ω reproduce la rapidez directa de la muñeca con r mediana de 0.87 y un RMSE de
-  ~11 % del pico. Las mayores discrepancias están cerca del impacto.
+- **Jacobiano:** J(θ)ω reproduce la rapidez directa de la muñeca con r mediana de 0.90 y un RMSE de
+  ~9 % del pico. Las mayores discrepancias están cerca del impacto.
 - **Filtrado:** la fc de Winter va de 5 a 9.7 Hz (mediana 8.8 Hz).
 - **Control de calidad (lateral):** se anularon ~22 % de las muestras por saltos de tracking, ~16 %
   por rapidez imposible y ~16 % por longitud de segmento.
@@ -173,16 +187,17 @@ suelo se estima como **F = m·(a_CoM + g)**, sin plataforma de fuerza. Como cont
 
 | Saque (lateral) | Altura de contacto (m) | Elevación máx. CoM (m) | v vertical máx. CoM (m/s) | Pico de fuerza (× peso) | Impulso neto (N·s) | Avance del CoM (m) |
 |---|---|---|---|---|---|---|
-| 1 | 2.09 | 0.16 | 1.23 | 2.1 | 76 | 0.25 |
-| 2 | 2.14 | 0.16 | 1.91 | 2.7 | 123 | 0.32 |
-| 3 | 2.18 | 0.18 | 1.95 | 2.9 | 127 | 0.35 |
-| 4 | 2.09 | 0.14 | 1.87 | 3.6 | 128 | 0.54 |
-| 5 | 2.13 | 0.15 | 2.01 | 3.3 | 133 | 0.46 |
+| 1 | 2.09 | 0.19 | 1.23 | 2.1 | 76 | 0.01 |
+| 2 | 2.14 | 0.20 | 1.91 | 2.7 | 123 | 0.06 |
+| 3 | 2.18 | 0.21 | 1.95 | 2.9 | 127 | 0.08 |
+| 4 | 2.09 | 0.17 | 1.87 | 3.6 | 128 | 0.27 |
+| 5 | 2.13 | 0.18 | 2.01 | 3.3 | 133 | 0.19 |
 
+- **Referencia:** la postura en reposo durante los 0.3 s previos al inicio del gesto.
 - **Altura de contacto:** posición de la pelota en el impacto (≈ 1.3 veces la estatura).
-- **Base de apoyo:** los tobillos pasan de estar separados unos 0.46 m al inicio a quedar juntos
+- **Base de apoyo:** los tobillos pasan de estar separados unos 0.43 m al inicio a quedar juntos
   (0.01–0.03 m) en la carga. Es la postura de pies juntos típica del saque.
-- **Vista posterior (control):** la elevación del CoM da 0.21 m. La diferencia con la lateral viene
+- **Vista posterior (control):** la elevación del CoM da 0.16 m. La diferencia con la lateral viene
   de la escala y la perspectiva de cada vista.
 - **Tiempo de vuelo:** no se reporta, porque con marcadores 2D la altura de los pies no es confiable.
 - **Fuerza cerca del impacto:** tampoco es confiable, porque el brazo de golpeo tiene huecos y una
@@ -197,21 +212,21 @@ Media de los 5 saques, en grados.
 
 | Vista lateral | Inicio | Máx. flexión de rodilla | Impacto |
 |---|---|---|---|
-| Rodilla | 171 | 105 | 160 |
-| Cadera | 169 | 161 | 151 |
-| Codo | 168 | 54 | 163 |
-| Hombro (brazo-tronco) | 31 | 41 | 123 |
-| Tobillo | 117 | 116 | 152 |
-| Inclinación del tronco (0 = vertical) | −19 | 18 | 25 |
+| Rodilla | 175 | 105 | 160 |
+| Cadera | 174 | 161 | 151 |
+| Codo | 173 | 54 | 163 |
+| Hombro (brazo-tronco) | 67 | 41 | 123 |
+| Tobillo | 130 | 116 | 152 |
+| Inclinación del tronco (0 = vertical) | −16 | 18 | 25 |
 
 | Vista posterior (plano frontal) | Inicio | Máx. flexión de rodilla | Impacto |
 |---|---|---|---|
-| Inclinación de la línea de hombros | 15 | −37 | 59 |
-| Inclinación de la línea de caderas | −20 | −30 | −13 |
-| Hombros − caderas | 34 | −7 | 67 |
-| Inclinación lateral del tronco | 4 | −25 | 28 |
+| Inclinación de la línea de hombros | 11 | −35 | 59 |
+| Inclinación de la línea de caderas | −21 | −35 | −13 |
+| Hombros − caderas | 31 | 0 | 67 |
+| Inclinación lateral del tronco | 4 | −20 | 28 |
 
-La línea de hombros pasa de −37° en la carga a +59° en el impacto: es el movimiento de "hombro
+La línea de hombros pasa de −35° en la carga a +59° en el impacto: es el movimiento de "hombro
 sobre hombro" del saque.
 
 ![Ángulos por evento](docs/img/posturas_lateral.png)
@@ -230,10 +245,10 @@ Medianas de los picos de dinámica inversa:
 
 | | Momento | Potencia |
 |---|---|---|
-| Hombro | 39 N·m | 2066 W |
-| Codo | 4 N·m | 91 W |
-| Cadera | 116 N·m (96–185) | 497 W (358–1603) |
-| Rodilla | 159 N·m (120–198) ≈ 2.7 N·m/kg | 784 W (551–1482) |
+| Hombro | 50 N·m | 2632 W |
+| Codo | 4 N·m | 92 W |
+| Cadera | 121 N·m (96–194) | 524 W (388–1674) |
+| Rodilla | 167 N·m (127–208) ≈ 2.9 N·m/kg | 842 W (580–1556) |
 | Tobillo | 29 N·m | 99 W |
 
 **Tren inferior con GRF estimada.** No hay plataforma de fuerza, así que la fuerza del suelo se estima
@@ -247,6 +262,8 @@ con el centro de masa como F = m·(a_CoM + g), en horizontal y vertical.
   de presión supuesto.
 - Antes se usaba GRF = 0 y los momentos de cadera y rodilla salían en 86 y 20 N·m; no representaban
   el apoyo.
+- Las longitudes de los segmentos son la mediana de cada ventana: al ampliarla a 3 s cambian un poco
+  los valores.
 
 Todo es exploratorio. Sin plataforma, el reparto entre pies y el centro de presión son supuestos; el
 tren superior no incluye la raqueta, y los picos del hombro están inflados por la doble derivada del
@@ -277,3 +294,19 @@ Para confirmarlo harían falta series más largas, de unos 20–30 saques.
 Cinemática 2D por vista (proyecciones), un solo sujeto, impacto fechado con la pelota pero sin medir su
 velocidad, dinámica inversa con supuestos fuertes (GRF estimada por el CoM, muñeca libre). Ver
 [`docs/pipeline_saque_kick.md`](docs/pipeline_saque_kick.md) §8.
+
+## Trabajo futuro
+
+Lo que requiere datos nuevos, más allá de lo que permiten estos videos:
+
+- **Velocidad de la pelota:** a 120 fps quedan muy pocos fotogramas útiles después del impacto. Un
+  radar o una cámara de ≥ 240 fps daría la medida de rendimiento necesaria para probar la hipótesis
+  H0 (transferencia próximo-distal ↔ rendimiento).
+- **Cinemática 3D:** dos cámaras calibradas (p. ej. con las líneas de la cancha) y sincronizadas
+  con una señal común. Se probó el 3D de una sola cámara de MediaPipe y se descartó: las dos vistas
+  discrepaban 20–50° en casi todos los ángulos.
+- **Fuerza del suelo medida:** una plataforma de fuerza validaría la GRF estimada por el CoM.
+- **Fatiga:** series de 20–30 saques y más jugadores; con 5 saques ninguna tendencia es concluyente.
+- **Comparación con la literatura** (objetivo 8): pendiente de seleccionar fuentes comparables
+  (población, tipo de saque, plano y definición de cada variable).
+- **Cargas en los tejidos:** ver [`docs/solido_continuo.md`](docs/solido_continuo.md) §5.

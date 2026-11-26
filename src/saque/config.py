@@ -37,7 +37,7 @@ DEFAULTS: dict = {
     "serves": {
         "expected": 5,
         "min_separation_s": 3.0,
-        "pre_impact_s": 1.6,
+        "pre_impact_s": 3.0,
         "post_impact_s": 0.8,
         "manual_impacts_s": {},
     },

@@ -473,7 +473,8 @@ def plot_levers_montage(frames: list[tuple[int, np.ndarray, pd.Series, float]], 
 
 
 # ---------------------------------------------------------------- análisis básicos adicionales
-PHASE_COLORS = {"carga": SERIES[0], "aceleracion": SERIES[1], "seguimiento": SERIES[2]}
+PHASE_COLORS = {"preparacion": "#bdbdbd", "carga": SERIES[0], "aceleracion": SERIES[1],
+                "seguimiento": SERIES[2]}
 JOINT_NAMES = {"hombro": "hombro (brazo-tronco)", "codo": "codo", "cadera": "cadera",
                "rodilla": "rodilla", "tobillo": "tobillo", "incl_tronco": "inclinación tronco"}
 

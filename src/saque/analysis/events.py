@@ -21,9 +21,21 @@ def _sustained_first(mask: np.ndarray, n: int) -> int | None:
     return None
 
 
+def _last_still_end(v: np.ndarray, thr: float, n: int, stop: int) -> int | None:
+    """Índice siguiente al final del último tramo de >= n muestras con v < thr antes de `stop`."""
+    run = 0
+    last = None
+    for i in range(stop):
+        run = run + 1 if v[i] < thr else 0
+        if run >= n:
+            last = i + 1
+    return last if last is not None and last < stop else None
+
+
 def detect_events(series: dict[str, Series], manual: dict | None = None, start_frac: float = 0.05,
                   end_frac: float = 0.20, sustain: int = 3, omega_margin_s: float = 0.05,
-                  flex_onset_frac: float = 0.05) -> dict:
+                  flex_onset_frac: float = 0.05, still_s: float = 0.1,
+                  stand_window_s: float = 1.0) -> dict:
     """Detecta eventos E1–E6.
 
     series: 'wrist_speed' (obligatoria); opcionales 'knee_angle' (interior, rad), 'elbow_angle'
@@ -48,10 +60,6 @@ def detect_events(series: dict[str, Series], manual: dict | None = None, start_f
     if pk in (0, len(v) - 1):
         warn.append("impacto en el borde del registro: el pico de rapidez no es un máximo interior (¿recorte del clip?)")
 
-    i0 = _sustained_first(v[: pk + 1] > start_frac * vmax, sustain)
-    ev["inicio"] = dict(t=float(t[i0 if i0 is not None else 0]), metodo=f"rapidez>{start_frac:.0%}pico")
-    if i0 is None:
-        warn.append("inicio: no se halló umbral sostenido; se usó la primera muestra")
 
     after = _sustained_first(v[pk:] < end_frac * vmax, sustain)
     if after is None:
@@ -60,7 +68,7 @@ def detect_events(series: dict[str, Series], manual: dict | None = None, start_f
     else:
         ev["fin"] = dict(t=float(t[pk + after]), metodo=f"rapidez<{end_frac:.0%}pico")
 
-    t_in, t_imp = ev["inicio"]["t"], ev["impacto"]["t"]       # t_in = inicio del movimiento de la MUÑECA
+    t_imp = ev["impacto"]["t"]
     if "knee_angle" in series:
         # La carga de rodillas ocurre ANTES de que se mueva la muñeca: se busca desde el inicio del registro.
         tk, k = (np.asarray(a, float) for a in series["knee_angle"])
@@ -69,14 +77,41 @@ def detect_events(series: dict[str, Series], manual: dict | None = None, start_f
             tm, km = tk[m], k[m]
             i_min = int(np.argmin(km))
             ev["max_flex_rodilla"] = dict(t=float(tm[i_min]), metodo="min_angulo_interior")
-            stand = float(np.max(km[: i_min + 1]))                 # postura erguida previa
+            # Postura erguida: máximo en el segundo previo a la máxima flexión (no en toda la ventana:
+            # la rutina previa puede tener la rodilla más extendida y desplazar el umbral).
+            j0 = int(np.searchsorted(tm, tm[i_min] - stand_window_s))
+            seg = km[j0: i_min + 1]
+            stand = float(np.nanmax(seg)) if np.isfinite(seg).any() else float(km[i_min])
             thr = stand - flex_onset_frac * (stand - km[i_min])
-            above = np.where(km[: i_min + 1] >= thr)[0]
+            above = j0 + np.where(km[j0: i_min + 1] >= thr)[0]
             if above.size and stand - km[i_min] > 0:
                 ev["inicio_flexion_rodilla"] = dict(
                     t=float(tm[above[-1]]), metodo=f"angulo<{1-flex_onset_frac:.0%}_del_rango_de_flexion")
         else:
             warn.append("rodilla: sin muestras antes del impacto (¿relojes distintos?)")
+    # Inicio: fin de la última quietud de la muñeca (>= still_s por debajo de start_frac·pico) antes
+    # de que empiece la flexión de rodilla (o del impacto). Buscar hacia atrás evita tomar como
+    # inicio la rutina previa (botar la pelota), que ya supera el umbral, y la pausa del armado.
+    fs = 1.0 / np.median(np.diff(t)) if len(t) > 1 else 120.0
+    n_still = max(sustain, int(round(still_s * fs)))
+    t_stop = ev.get("inicio_flexion_rodilla", ev.get("max_flex_rodilla", ev["impacto"]))["t"]
+    stop = int(np.searchsorted(t, t_stop))
+    # Umbral con el pico real cerca del impacto (la rapidez en el fotograma marcado como impacto
+    # puede ser bastante menor que el pico y daría un umbral demasiado bajo).
+    near = (t >= t_imp - 0.15) & (t <= t_imp + 0.05)
+    thr0 = start_frac * (float(np.nanmax(v[near])) if near.any() else vmax)
+    i0 = _last_still_end(v, thr0, n_still, min(stop, pk))
+    if i0 is None and 0 < stop <= pk and v[stop - 1] < thr0:
+        # La muñeca sigue quieta cuando empiezan las rodillas: su movimiento empieza después.
+        i0 = _last_still_end(v, thr0, n_still, pk)
+    if i0 is not None:
+        ev["inicio"] = dict(t=float(t[i0]), metodo=f"fin_quietud_muñeca(<{start_frac:.0%}pico)")
+    else:
+        i0 = _sustained_first(v[: pk + 1] > start_frac * vmax, sustain)
+        ev["inicio"] = dict(t=float(t[i0 if i0 is not None else 0]), metodo=f"rapidez>{start_frac:.0%}pico")
+        warn.append("inicio: no se halló quietud de la muñeca antes de la carga; se usó el primer "
+                    "cruce del umbral (puede ser el borde de la ventana)")
+    t_in = ev["inicio"]["t"]
     if "elbow_omega" in series:
         to, w = (np.asarray(a, float) for a in series["elbow_omega"])
         m = (to >= t_in) & (to <= t_imp + omega_margin_s)
@@ -97,9 +132,10 @@ def detect_events(series: dict[str, Series], manual: dict | None = None, start_f
 
 
 def phase_table(ev: dict) -> pd.DataFrame:
-    """Fases con los eventos disponibles: carga, aceleración, seguimiento."""
+    """Fases con los eventos disponibles: preparación (lanzamiento y armado), carga, aceleración y
+    seguimiento."""
     start = "inicio_flexion_rodilla" if "inicio_flexion_rodilla" in ev else "inicio"
-    pts = [("carga", start, "max_flex_rodilla"), ("aceleracion", "max_flex_rodilla", "impacto"),
+    pts = [("preparacion", "inicio", "inicio_flexion_rodilla"), ("carga", start, "max_flex_rodilla"), ("aceleracion", "max_flex_rodilla", "impacto"),
            ("seguimiento", "impacto", "fin")]
     rows = []
     for name, a, b in pts:

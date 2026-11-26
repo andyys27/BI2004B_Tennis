@@ -83,7 +83,7 @@ serves:
   reference_view: lateral      # vista donde se fecha el impacto (la pelota se ve contra el cielo)
   impact_method: ball          # ball = fin de la caída de la pelota | wrist = máx. rapidez de muñeca
   min_separation_s: 3.0
-  pre_impact_s: 1.6            # ventana de cada saque alrededor del impacto
+  pre_impact_s: 3.0            # ventana de cada saque alrededor del impacto (el gesto empieza ~2.5 s antes)
   post_impact_s: 0.8
   manual_impacts_s: {}         # ej. {lateral: [5.1, 13.4, ...]} para corregir la detección
 

@@ -249,8 +249,16 @@ def _series(kin: pd.DataFrame, col: str):
     return (kin["time_s"].to_numpy(), kin[col].to_numpy()) if col in kin else None
 
 
+def _shift_events(ref_ev: dict, lag_s: float, ref_view: str) -> dict:
+    """Eventos de la vista de referencia llevados al reloj de otra vista (t + desfase)."""
+    return {e: dict(t=v["t"] + lag_s, metodo=f"{ref_view}+desfase ({v['metodo']})")
+            for e, v in ref_ev.items() if not e.startswith("_")}
+
+
 def analyze_serve(ctx: Context, view: str, kin: pd.DataFrame, filt: pd.DataFrame,
-                  w: pd.Series) -> dict:
+                  w: pd.Series, ref_ev: dict | None = None, lag_s: float = 0.0) -> dict:
+    """Análisis de un saque. Con `ref_ev`, los eventos se toman de la vista de referencia
+    trasladados con `lag_s` en lugar de detectarse en esta vista."""
     m = (kin["time_s"] >= w["t_ini"]) & (kin["time_s"] <= w["t_fin"])
     k, f = kin.loc[m].reset_index(drop=True), filt.loc[m].reset_index(drop=True)
     s = int(w["saque"])
@@ -260,10 +268,15 @@ def analyze_serve(ctx: Context, view: str, kin: pd.DataFrame, filt: pd.DataFrame
            "elbow_omega": _series(k, "omega_interior_codo")}
     ser = {a: b for a, b in ser.items() if b is not None}
     ecfg = ctx.cfg["events"]
-    ev = detect_events(ser, manual={"impacto": float(w["t_impacto"])},
-                       start_frac=ecfg["start_frac"], end_frac=ecfg["end_frac"])
-    for msg in ev.pop("_warnings"):
-        ctx.warnings.append(f"{view} saque {s}: {msg}")
+    if ref_ev is not None:
+        # Vista secundaria: sus propios eventos no son fiables (en la posterior la rapidez de la
+        # muñeca nunca baja del 5 % del pico y el inicio caía en el borde de la ventana).
+        ev = _shift_events(ref_ev, lag_s, ctx.cfg["serves"]["reference_view"])
+    else:
+        ev = detect_events(ser, manual={"impacto": float(w["t_impacto"])},
+                           start_frac=ecfg["start_frac"], end_frac=ecfg["end_frac"])
+        for msg in ev.pop("_warnings"):
+            ctx.warnings.append(f"{view} saque {s}: {msg}")
     events = pd.DataFrame([dict(vista=view, saque=s, evento=e, **v) for e, v in ev.items()])
     phases = phase_table(ev).assign(vista=view, saque=s)
     out = dict(events=events, phases=phases, kin=k, ev=ev)
@@ -328,7 +341,10 @@ def analyze_serve(ctx: Context, view: str, kin: pd.DataFrame, filt: pd.DataFrame
     # Cuerpo completo: CoM, fuerza del suelo estimada, base de apoyo, posturas, ROM, palancas.
     bcfg = ctx.cfg["body"]
     t_load = ev.get("max_flex_rodilla", {}).get("t", np.nan)
-    body = com_serve_metrics(k, float(w["t_ini"]), t_load, float(w["t_impacto"]), mass)
+    # Referencia del CoM: los 0.3 s de quietud justo antes del inicio del gesto (no el borde de la
+    # ventana, que depende de pre_impact_s).
+    body = com_serve_metrics(k, max(float(w["t_ini"]), ev["inicio"]["t"] - 0.3), t_load,
+                             float(w["t_impacto"]), mass)
     if {"x_tobillo_izq", "x_tobillo_der"} <= set(f):
         body["separacion_tobillos_inicio_m"] = stance(f, ev["inicio"]["t"])
         if np.isfinite(t_load):
@@ -390,12 +406,21 @@ def stage_analysis(ctx: Context) -> dict:
                                            "picos_articulares")}
     fat_view = ctx.cfg["fatigue"]["view"]
     fat_results = {}
-    for view in ctx.cfg["views"]:
+    ref_view = ctx.cfg["serves"]["reference_view"]
+    sync_path = ctx.paths.tables / "sincronizacion.csv"
+    lags = pd.read_csv(sync_path).set_index("vista")["lag_s"].to_dict() if sync_path.exists() else {}
+    ref_events: dict[int, dict] = {}
+    views = [ref_view] + [v for v in ctx.cfg["views"] if v != ref_view]   # la referencia primero
+    for view in views:
         kin = load_kin(ctx, view)
         filt = pd.read_parquet(ctx.view_dir(view) / "markers_filtered.parquet")
         for _, w in serves[serves["vista"] == view].iterrows():
-            r = analyze_serve(ctx, view, kin, filt, w)
             s = int(w["saque"])
+            use_ref = view != ref_view and s in ref_events and view in lags
+            r = analyze_serve(ctx, view, kin, filt, w, ref_events.get(s) if use_ref else None,
+                              float(lags.get(view, 0.0)))
+            if view == ref_view:
+                ref_events[s] = r["ev"]
             sd = ctx.view_dir(view) / f"saque_{s:02d}"
             sd.mkdir(exist_ok=True)
             r["kin"].to_csv(sd / "kinematics.csv", index=False)

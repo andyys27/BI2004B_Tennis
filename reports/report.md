@@ -30,16 +30,16 @@ Cada marcador usa el centroide de la estampita cuando se detecta y, si no, el la
 ## 3. Saques detectados
 | vista | saque | t_ini | t_impacto | t_fin |
 |---|---|---|---|---|
-| lateral | 1 | 3.39 | 4.99 | 5.79 |
-| lateral | 2 | 11.5 | 13.1 | 13.9 |
-| lateral | 3 | 21.2 | 22.8 | 23.6 |
-| lateral | 4 | 29.6 | 31.2 | 32 |
-| lateral | 5 | 39.6 | 41.2 | 42 |
-| posterior | 1 | 4.04 | 5.64 | 6.44 |
-| posterior | 2 | 12.1 | 13.7 | 14.5 |
-| posterior | 3 | 21.9 | 23.5 | 24.3 |
-| posterior | 4 | 30.3 | 31.9 | 32.7 |
-| posterior | 5 | 40.2 | 41.8 | 42.6 |
+| lateral | 1 | 1.99 | 4.99 | 5.79 |
+| lateral | 2 | 10.1 | 13.1 | 13.9 |
+| lateral | 3 | 19.8 | 22.8 | 23.6 |
+| lateral | 4 | 28.2 | 31.2 | 32 |
+| lateral | 5 | 38.2 | 41.2 | 42 |
+| posterior | 1 | 2.64 | 5.64 | 6.44 |
+| posterior | 2 | 10.7 | 13.7 | 14.5 |
+| posterior | 3 | 20.5 | 23.5 | 24.3 |
+| posterior | 4 | 28.9 | 31.9 | 32.7 |
+| posterior | 5 | 38.8 | 41.8 | 42.6 |
 
 Sincronización entre vistas: t_vista = t_referencia + lag_s (por correlación de la altura de cadera). El control compara con los impactos que la vista detecta por su cuenta con la muñeca:
 
@@ -54,18 +54,18 @@ Sincronización entre vistas: t_vista = t_referencia + lag_s (por correlación d
 ![impactos_posterior](figures/impactos_posterior.png)
 
 ## 4. Fases (duración en ms)
-| vista | saque | aceleracion | carga | seguimiento |
-|---|---|---|---|---|
-| lateral | 1 | 475 | 524 | 258 |
-| lateral | 2 | 433 | 574 | 241 |
-| lateral | 3 | 441 | 541 | 258 |
-| lateral | 4 | 550 | 391 | 316 |
-| lateral | 5 | 533 | 383 | 308 |
-| posterior | 1 | 334 | 424 | 423 |
-| posterior | 2 | 309 | 1290 | 432 |
-| posterior | 3 | 292 | 424 | 398 |
-| posterior | 4 | 284 | 433 | 390 |
-| posterior | 5 | 268 | 441 | 398 |
+| vista | saque | aceleracion | carga | preparacion | seguimiento |
+|---|---|---|---|---|---|
+| lateral | 1 | 475 | 524 | 1257 | 258 |
+| lateral | 2 | 433 | 574 | 1356 | 241 |
+| lateral | 3 | 441 | 541 | 1323 | 258 |
+| lateral | 4 | 550 | 391 | 1348 | 316 |
+| lateral | 5 | 533 | 383 | 1356 | 308 |
+| posterior | 1 | 475 | 524 | 1257 | 258 |
+| posterior | 2 | 433 | 574 | 1356 | 241 |
+| posterior | 3 | 441 | 541 | 1323 | 258 |
+| posterior | 4 | 550 | 391 | 1348 | 316 |
+| posterior | 5 | 533 | 383 | 1356 | 308 |
 
 ![fases](figures/fases.png)
 
@@ -74,7 +74,7 @@ Pico de |ω| (o rapidez de muñeca) de cada segmento entre el inicio y 50 ms des
 
 | vista | saque | orden_observado | tau_kendall | n_invertidos | lags_ms | nota |
 |---|---|---|---|---|---|---|
-| lateral | 1 | tronco > codo > brazo > muneca > muslo | 0 | 2 | -441;350;-33;83 | nan |
+| lateral | 1 | brazo > tronco > codo > muneca > muslo | 0 | 2 | -441;-1490;1806;83 | nan |
 | lateral | 2 | muslo = tronco > brazo = codo > muneca | 0.894 | 0 | 0;42;0;58 | 2 pico(s) simultáneo(s) |
 | lateral | 3 | muslo > tronco > brazo = codo = muneca | 0.837 | 0 | 92;158;0;0 | 2 pico(s) simultáneo(s) |
 | lateral | 4 | brazo = codo > muslo > muneca > tronco | -0.105 | 1 | 250;-258;0;108 | 1 pico(s) simultáneo(s) |
@@ -94,34 +94,34 @@ Picos de |ω| y |α| entre inicio e impacto (media ± DE de los saques; tiempo m
 
 | vista | articulacion | magnitud | unidad | media | de | t_rel_impacto_ms | frac_valida |
 |---|---|---|---|---|---|---|---|
-| lateral | cadera | alpha | rad/s² | 547 | 99.3 | -292 | 0.97 |
-| lateral | cadera | omega | rad/s | 9.25 | 2.22 | -167 | 0.97 |
-| lateral | codo | alpha | rad/s² | 3.59e+03 | 2.33e+03 | -150 | 0.951 |
-| lateral | codo | omega | rad/s | 37.8 | 18.8 | -142 | 0.951 |
-| lateral | hombro | alpha | rad/s² | 3.48e+03 | 2.48e+03 | -158 | 0.946 |
-| lateral | hombro | omega | rad/s | 31.3 | 17.5 | -41.9 | 0.946 |
-| lateral | rodilla | alpha | rad/s² | 394 | 138 | -100 | 0.992 |
-| lateral | rodilla | omega | rad/s | 9.6 | 0.602 | -192 | 0.992 |
-| lateral | tobillo | alpha | rad/s² | 838 | 263 | -41.9 | 0.992 |
-| lateral | tobillo | omega | rad/s | 13.8 | 11 | -42 | 0.992 |
-| posterior | codo | alpha | rad/s² | 680 | 301 | -59.5 | 0.527 |
-| posterior | codo | omega | rad/s | 18.5 | 10.5 | -67.8 | 0.527 |
-| posterior | rodilla | alpha | rad/s² | 358 | 64.7 | -143 | 0.958 |
-| posterior | rodilla | omega | rad/s | 5.85 | 1.14 | -209 | 0.958 |
-| posterior | rodilla_izq | alpha | rad/s² | 731 | 185 | -184 | 0.82 |
-| posterior | rodilla_izq | omega | rad/s | 6.85 | 0.45 | -850 | 0.82 |
+| lateral | cadera | alpha | rad/s² | 547 | 99.3 | -292 | 0.979 |
+| lateral | cadera | omega | rad/s | 9.25 | 2.22 | -167 | 0.979 |
+| lateral | codo | alpha | rad/s² | 3.6e+03 | 2.31e+03 | -158 | 0.966 |
+| lateral | codo | omega | rad/s | 37.8 | 18.8 | -142 | 0.966 |
+| lateral | hombro | alpha | rad/s² | 3.51e+03 | 2.42e+03 | -158 | 0.962 |
+| lateral | hombro | omega | rad/s | 31.7 | 16.9 | -150 | 0.962 |
+| lateral | rodilla | alpha | rad/s² | 394 | 138 | -100 | 0.994 |
+| lateral | rodilla | omega | rad/s | 9.6 | 0.602 | -192 | 0.994 |
+| lateral | tobillo | alpha | rad/s² | 838 | 263 | -41.9 | 0.994 |
+| lateral | tobillo | omega | rad/s | 13.8 | 11 | -42 | 0.994 |
+| posterior | codo | alpha | rad/s² | 680 | 301 | -59.5 | 0.466 |
+| posterior | codo | omega | rad/s | 18.5 | 10.5 | -67.8 | 0.466 |
+| posterior | rodilla | alpha | rad/s² | 358 | 64.7 | -143 | 0.971 |
+| posterior | rodilla | omega | rad/s | 5.85 | 1.14 | -209 | 0.971 |
+| posterior | rodilla_izq | alpha | rad/s² | 731 | 185 | -184 | 0.838 |
+| posterior | rodilla_izq | omega | rad/s | 6.85 | 0.45 | -850 | 0.838 |
 
 ## 6c. Consistencia entre saques
 DE entre saques a lo largo del gesto y RMSD de cada saque respecto a la curva media (ángulos, °). Un saque con RMSD alto en todas las articulaciones fue técnicamente distinto del resto.
 
 | variable | saque_1 | saque_2 | saque_3 | saque_4 | saque_5 |
 |---|---|---|---|---|---|
-| theta_cadera | 5.0 | 3.4 | 3.2 | 3.5 | 2.7 |
-| theta_codo | 13.3 | 7.6 | 8.2 | 9.2 | 7.5 |
-| theta_hombro | 9.0 | 5.6 | 8.2 | 6.4 | 6.0 |
-| theta_incl_tronco | 4.3 | 2.4 | 3.0 | 4.9 | 2.3 |
-| theta_rodilla | 7.3 | 3.0 | 1.5 | 4.1 | 3.7 |
-| theta_tobillo | 9.6 | 3.1 | 2.4 | 4.1 | 4.9 |
+| theta_cadera | 4.3 | 3.1 | 2.8 | 2.8 | 2.2 |
+| theta_codo | 10.5 | 6.3 | 7.0 | 8.2 | 5.5 |
+| theta_hombro | 8.0 | 5.1 | 6.6 | 6.0 | 5.0 |
+| theta_incl_tronco | 3.7 | 2.4 | 2.6 | 4.1 | 2.1 |
+| theta_rodilla | 5.5 | 3.1 | 1.3 | 3.0 | 2.7 |
+| theta_tobillo | 8.1 | 2.6 | 2.1 | 3.6 | 3.9 |
 
 ![variabilidad](figures/variabilidad_saques.png)
 
@@ -176,11 +176,11 @@ Confianza: *alta* = posiciones, ángulos y tiempos; *baja* = picos de velocidad 
 ## 8. Jacobiano v = J(θ)ω
 | vista | saque | L_brazo | cv_brazo | L_antebrazo | cv_antebrazo | rmse_rel_pico | corr_speed | pico_speed_directa |
 |---|---|---|---|---|---|---|---|---|
-| lateral | 1 | 0.205 | 0.255 | 0.188 | 0.203 | 0.0375 | 0.874 | 11.4 |
-| lateral | 2 | 0.195 | 0.236 | 0.178 | 0.238 | 0.147 | 0.91 | 6.37 |
-| lateral | 3 | 0.217 | 0.245 | 0.198 | 0.234 | 0.121 | 0.836 | 8.29 |
-| lateral | 4 | 0.205 | 0.228 | 0.198 | 0.227 | 0.0713 | 0.903 | 6.17 |
-| lateral | 5 | 0.206 | 0.227 | 0.193 | 0.196 | 0.111 | 0.853 | 6.48 |
+| lateral | 1 | 0.225 | 0.238 | 0.198 | 0.172 | 0.032 | 0.897 | 11.4 |
+| lateral | 2 | 0.22 | 0.236 | 0.186 | 0.209 | 0.135 | 0.906 | 6.37 |
+| lateral | 3 | 0.233 | 0.208 | 0.199 | 0.205 | 0.0956 | 0.848 | 8.29 |
+| lateral | 4 | 0.232 | 0.222 | 0.2 | 0.189 | 0.0622 | 0.912 | 6.17 |
+| lateral | 5 | 0.228 | 0.234 | 0.196 | 0.176 | 0.0892 | 0.867 | 6.48 |
 
 ![jacobiano_validacion](figures/jacobiano_validacion.png)
 
@@ -195,16 +195,16 @@ Fuerza vertical estimada F = m(a_CoM + g) (suma de ambos pies). Fin del impulso 
 
 | vista | saque | altura_contacto_m | elevacion_max_com_m | vy_max_com_m_s | grf_pico_bw | impulso_neto_Ns | v_por_impulso_m_s | separacion_tobillos_inicio_m | separacion_tobillos_carga_m | desplazamiento_x_com_m |
 |---|---|---|---|---|---|---|---|---|---|---|
-| lateral | 1 | 2.09 | 0.155 | 1.23 | 2.12 | 76.2 | 1.31 | 0.439 | 0.031 | 0.254 |
-| lateral | 2 | 2.14 | 0.162 | 1.91 | 2.71 | 123 | 2.12 | 0.453 | 0.00715 | 0.322 |
-| lateral | 3 | 2.18 | 0.181 | 1.95 | 2.89 | 127 | 2.19 | 0.468 | 0.00988 | 0.347 |
-| lateral | 4 | 2.09 | 0.141 | 1.87 | 3.64 | 128 | 2.21 | 0.477 | 0.0279 | 0.536 |
-| lateral | 5 | 2.13 | 0.15 | 2.01 | 3.27 | 133 | 2.3 | 0.483 | 0.018 | 0.459 |
-| posterior | 1 | nan | 0.214 | 1.26 | nan | 0 | 0 | 0.301 | 0.108 | -0.313 |
-| posterior | 2 | nan | 0.202 | 0.883 | 1.18 | 2.35 | 0.0405 | 0.285 | nan | -0.312 |
-| posterior | 3 | nan | 0.21 | 0.909 | 2.05 | 28.6 | 0.493 | 0.314 | nan | -0.292 |
-| posterior | 4 | nan | 0.213 | 0.998 | 2.28 | 25.3 | 0.436 | 0.302 | nan | -0.421 |
-| posterior | 5 | nan | 0.209 | 1.01 | 2.01 | 31.4 | 0.541 | 0.313 | nan | -0.357 |
+| lateral | 1 | 2.09 | 0.195 | 1.23 | 2.12 | 76.2 | 1.31 | 0.42 | 0.031 | 0.0134 |
+| lateral | 2 | 2.14 | 0.196 | 1.91 | 2.71 | 123 | 2.12 | 0.425 | 0.00715 | 0.0575 |
+| lateral | 3 | 2.18 | 0.215 | 1.95 | 2.89 | 127 | 2.19 | 0.426 | 0.00988 | 0.0762 |
+| lateral | 4 | 2.09 | 0.172 | 1.87 | 3.64 | 128 | 2.21 | 0.447 | 0.0279 | 0.267 |
+| lateral | 5 | 2.13 | 0.181 | 2.01 | 3.27 | 133 | 2.3 | 0.452 | 0.018 | 0.187 |
+| posterior | 1 | nan | 0.162 | 1.26 | 2.26 | 0.548 | 0.00945 | 0.295 | 0.0914 | -0.161 |
+| posterior | 2 | nan | 0.149 | 0.883 | 2.8 | 42.1 | 0.726 | nan | 0.0863 | -0.153 |
+| posterior | 3 | nan | 0.169 | 0.909 | 2.61 | 69.4 | 1.2 | 0.31 | 0.0987 | -0.112 |
+| posterior | 4 | nan | 0.16 | 0.998 | 2.28 | 70.6 | 1.22 | 0.3 | 0.157 | -0.245 |
+| posterior | 5 | nan | 0.162 | 1.01 | 2.47 | 73 | 1.26 | 0.307 | 0.146 | -0.185 |
 
 ![com_fuerza_suelo](figures/com_fuerza_suelo.png)
 
@@ -213,19 +213,19 @@ Fuerza vertical estimada F = m(a_CoM + g) (suma de ambos pies). Fin del impulso 
 ## 10. Ángulos en los eventos (media de los saques, °)
 | vista | variable | fin | impacto | inicio | inicio_flexion_rodilla | max_flex_rodilla |
 |---|---|---|---|---|---|---|
-| lateral | theta_incl_tronco | 32 | 25 | -19 | -4 | 18 |
-| lateral | theta_interior_cadera | 152 | 151 | 169 | 170 | 161 |
-| lateral | theta_interior_codo | 130 | 163 | 168 | 124 | 54 |
-| lateral | theta_interior_hombro | 22 | 123 | 31 | 73 | 41 |
-| lateral | theta_interior_rodilla | 52 | 160 | 171 | 172 | 105 |
-| lateral | theta_interior_tobillo | 117 | 152 | 117 | 112 | 116 |
-| posterior | theta_incl_linea_caderas | 60 | -13 | -20 | -31 | -30 |
-| posterior | theta_incl_linea_hombros | 148 | 59 | 15 | -26 | -37 |
-| posterior | theta_incl_tronco | 51 | 28 | 4 | -16 | -25 |
-| posterior | theta_interior_codo | 112 | 162 | 176 | 95 | 24 |
-| posterior | theta_interior_rodilla | 70 | 169 | 175 | 179 | 148 |
-| posterior | theta_interior_rodilla_izq | 135 | 174 | 170 | 175 | nan |
-| posterior | theta_sep_hombros_caderas | 131 | 67 | 34 | 4 | -7 |
+| lateral | theta_incl_tronco | 32 | 25 | -16 | -4 | 18 |
+| lateral | theta_interior_cadera | 152 | 151 | 174 | 170 | 161 |
+| lateral | theta_interior_codo | 130 | 163 | 173 | 124 | 54 |
+| lateral | theta_interior_hombro | 22 | 123 | 67 | 73 | 41 |
+| lateral | theta_interior_rodilla | 52 | 160 | 175 | 172 | 105 |
+| lateral | theta_interior_tobillo | 117 | 152 | 130 | 112 | 116 |
+| posterior | theta_incl_linea_caderas | nan | -13 | -21 | -23 | -35 |
+| posterior | theta_incl_linea_hombros | 175 | 59 | 11 | -10 | -35 |
+| posterior | theta_incl_tronco | 43 | 28 | 4 | -9 | -20 |
+| posterior | theta_interior_codo | 176 | 162 | nan | nan | 48 |
+| posterior | theta_interior_rodilla | 116 | 169 | 172 | 175 | 153 |
+| posterior | theta_interior_rodilla_izq | 117 | 174 | 174 | 173 | 174 |
+| posterior | theta_sep_hombros_caderas | nan | 67 | 31 | 14 | 0 |
 
 ![posturas_lateral](figures/posturas_lateral.png)
 
@@ -236,18 +236,18 @@ Fuerza vertical estimada F = m(a_CoM + g) (suma de ambos pies). Fin del impulso 
 ## 11. Rango de movimiento inicio → impacto (°)
 | vista | variable | mean | std |
 |---|---|---|---|
-| lateral | theta_incl_tronco | 55.8 | 5.8 |
-| lateral | theta_interior_cadera | 39.3 | 5.6 |
-| lateral | theta_interior_codo | 135.8 | 11.1 |
-| lateral | theta_interior_hombro | 146.4 | 19.8 |
+| lateral | theta_incl_tronco | 57.3 | 7.0 |
+| lateral | theta_interior_cadera | 39.3 | 5.5 |
+| lateral | theta_interior_codo | 135.9 | 11.1 |
+| lateral | theta_interior_hombro | 165.0 | 15.0 |
 | lateral | theta_interior_rodilla | 74.7 | 1.2 |
 | lateral | theta_interior_tobillo | 72.7 | 5.8 |
 | posterior | theta_incl_linea_caderas | 48.6 | 8.5 |
 | posterior | theta_incl_linea_hombros | 100.5 | 4.6 |
 | posterior | theta_incl_tronco | 53.0 | 1.2 |
-| posterior | theta_interior_codo | 151.6 | 5.1 |
+| posterior | theta_interior_codo | 153.1 | 4.5 |
 | posterior | theta_interior_rodilla | 33.1 | 5.4 |
-| posterior | theta_interior_rodilla_izq | 16.4 | 4.4 |
+| posterior | theta_interior_rodilla_izq | 16.5 | 4.3 |
 | posterior | theta_sep_hombros_caderas | 74.8 | 4.2 |
 
 ![rom](figures/rango_movimiento.png)
@@ -277,16 +277,16 @@ Tren inferior con GRF estimada por el CoM, F = m(a_CoM + g), 50 % por pierna (pi
 
 | parte | variable | unidad | median | min | max |
 |---|---|---|---|---|---|
-| tren_inferior | P_ankle_W | W | 98.9 | 52.9 | 133.7 |
-| tren_inferior | P_hip_W | W | 497.4 | 357.9 | 1602.9 |
-| tren_inferior | P_knee_W | W | 784.0 | 551.3 | 1481.8 |
+| tren_inferior | P_ankle_W | W | 98.9 | 52.7 | 133.7 |
+| tren_inferior | P_hip_W | W | 523.6 | 388.0 | 1674.1 |
+| tren_inferior | P_knee_W | W | 841.6 | 579.5 | 1555.8 |
 | tren_inferior | T_ankle_Nm | N·m | 28.7 | 21.7 | 52.8 |
-| tren_inferior | T_hip_Nm | N·m | 116.0 | 95.6 | 185.2 |
-| tren_inferior | T_knee_Nm | N·m | 158.8 | 119.7 | 198.4 |
-| tren_superior | P_elbow_W | W | 91.3 | 41.8 | 148.0 |
-| tren_superior | P_shoulder_W | W | 2065.6 | 26.0 | 5400.3 |
-| tren_superior | T_elbow_Nm | N·m | 4.3 | 3.3 | 14.9 |
-| tren_superior | T_shoulder_Nm | N·m | 38.9 | 7.6 | 210.6 |
+| tren_inferior | T_hip_Nm | N·m | 120.6 | 96.4 | 193.7 |
+| tren_inferior | T_knee_Nm | N·m | 166.7 | 127.1 | 208.4 |
+| tren_superior | P_elbow_W | W | 92.2 | 44.9 | 163.1 |
+| tren_superior | P_shoulder_W | W | 2632.3 | 32.8 | 6643.3 |
+| tren_superior | T_elbow_Nm | N·m | 4.4 | 3.5 | 15.1 |
+| tren_superior | T_shoulder_Nm | N·m | 49.6 | 7.9 | 242.8 |
 
 ![picos](figures/dinamica_inversa_picos.png)
 

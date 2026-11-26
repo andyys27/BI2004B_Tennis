@@ -70,3 +70,20 @@ def test_qc_summary():
     assert q["longitud_segmento"] == 15
     assert q["salto_tracking"] == 2
     assert "huecos" not in q
+
+
+def test_inicio_es_fin_de_la_quietud_no_el_borde():
+    """Rutina previa (muñeca a 0.6 m/s) -> quietud -> lanzamiento/carga -> impacto."""
+    fs = 120.0
+    t = np.arange(0, 3.0, 1 / fs)
+    v = np.where(t < 0.4, 0.6, 0.05)                         # rutina previa y luego quietud
+    v = v + np.clip((t - 0.6) * 2, 0, None) * (t < 2.0)       # el gesto empieza en t = 0.6
+    v = v + 8 * np.exp(-0.5 * ((t - 2.5) / 0.08) ** 2)        # impacto en 2.5
+    knee = 2.8 - 1.0 * np.exp(-0.5 * ((t - 1.8) / 0.25) ** 2)  # flexión de rodilla después
+    ev = events.detect_events({"wrist_speed": (t, v), "knee_angle": (t, knee)})
+    # Fin de la quietud = cruce del umbral (5 % del pico) en la rampa que empieza en 0.6 s,
+    # no el borde de la ventana (t = 0) ni la rutina previa.
+    t_cross = t[np.argmax((t > 0.4) & (v > 0.05 * v.max()))]
+    assert ev["inicio"]["t"] == pytest.approx(t_cross, abs=2 / fs)
+    assert 0.6 < ev["inicio"]["t"] < 1.0
+    assert ev["inicio"]["metodo"].startswith("fin_quietud")

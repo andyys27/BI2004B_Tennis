@@ -153,13 +153,19 @@ cada hueco** porque los bordes del filtro y de la derivada producían picos espu
   al menos 3 s.
 - **Impacto**: fin de la caída de la pelota (ver §3.4). Se puede corregir con
   `serves.manual_impacts_s`.
-- **Ventana de cada saque**: de 1.6 s antes a 0.8 s después del impacto.
+- **Ventana de cada saque**: de 3.0 s antes a 0.8 s después del impacto. El gesto empieza ~2.3 s
+  antes; con 1.6 s quedaba fuera.
 - **Sincronización**: correlación cruzada de la altura media de cadera. Los saltos de los saques se
   ven en las dos vistas: posterior = lateral + 0.64 s, con correlación 0.75. Como control, los
   impactos que la vista posterior detecta por su cuenta con la muñeca difieren 0.13 s en mediana.
-- **Eventos**: inicio (rapidez de muñeca > 5 % del pico), inicio de flexión de rodilla, máxima
-  flexión de rodilla, pico de ω del codo, impacto y fin (rapidez < 20 % del pico). Fases: carga,
-  aceleración y seguimiento.
+- **Eventos**: inicio (fin de la última quietud de la muñeca, ≥ 0.1 s por debajo del 5 % del pico
+  cerca del impacto, antes de la flexión de rodilla), inicio de flexión de rodilla (95 % del rango
+  desde la postura erguida del segundo previo), máxima
+  flexión de rodilla, pico de ω del codo, impacto y fin (rapidez < 20 % del pico). Fases:
+  preparación (lanzamiento y armado), carga, aceleración y seguimiento.
+- **Vista posterior**: no detecta sus propios eventos. Usa los de la lateral trasladados con el
+  desfase entre vistas, porque su rapidez de muñeca nunca baja del umbral y el inicio caía en el
+  borde de la ventana.
 - **Secuencia próximo-distal** (vista lateral): pico de |ω| (o rapidez de muñeca) de muslo → tronco
   → brazo → codo → muñeca entre el inicio y `sequence_margin_s` después del impacto. Usa `nanargmax`,
   y una serie con menos de `sequence_min_valid_frac` (50 %) de muestras válidas se omite. Se reportan
@@ -253,6 +259,9 @@ son válidas, el pico de ese saque se excluye. El valor original se conserva en 
 
 ## 8. Limitaciones y decisiones
 
+La discusión sobre la idealización en segmentos rígidos frente al sólido continuo está en
+[`solido_continuo.md`](solido_continuo.md).
+
 1. Cada vista es una proyección 2D. Las rotaciones fuera del plano (rotación interna del hombro,
    pronación) no se miden y alteran los ángulos proyectados.
 2. MediaPipe pierde el brazo de golpeo en algunos impactos. Las estampitas lo compensan solo donde
@@ -284,7 +293,7 @@ son válidas, el pico de ese saque se excluye. El valor original se conserva en 
 | `figures/` | detección de saques, impactos con esqueleto, fuentes, fases, secuencia cinemática, θ/ω/α, variabilidad, correlaciones, curvas, fatiga, Jacobiano y su validación, residuos de Winter, QC, dinámica inversa |
 
 ## 10. Pruebas
-`pytest`: 63 pruebas con datos sintéticos, sin video:
+`pytest`: 62 pruebas con datos sintéticos, sin video:
 - estampitas y malla temporal con fotogramas perdidos;
 - calibración, fusión y duplicados, y controles de QC;
 - filtrado por tramos y recorte de bordes;
