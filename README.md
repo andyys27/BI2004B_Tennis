@@ -61,19 +61,72 @@ docs/          contexto del proyecto y documento maestro del pipeline
 
 Detalle de métodos, decisiones y limitaciones: [`docs/pipeline_saque_kick.md`](docs/pipeline_saque_kick.md).
 
-## Estado de los resultados (corrida actual)
+## Resultados (corrida del 26-nov-2026)
 
-- **5 saques detectados** en ambas vistas; el impacto por la pelota se verificó visualmente
-  (`reports/figures/impactos_lateral.png`: la pelota está en las cuerdas en los 5).
-- **Sincronización**: la vista posterior va 0.64 s atrasada (correlación de cadera 0.75).
-- **Estampitas** (vista lateral, lado de golpeo): hombro 96 %, muñeca 80 %, rodilla 74 %, tobillo 72 %,
-  codo 71 % de los fotogramas; el resto usa MediaPipe corregido o queda como hueco.
-- **Fatiga (exploratorio, n = 5)**: los indicadores de confianza alta (flexión de rodilla, altura de muñeca,
-  duración de fases) **no muestran una tendencia concluyente**. Los picos de velocidad angular del brazo
-  solo son válidos en 3 de 5 saques (oclusión del brazo cerca del impacto) y no sostienen conclusiones.
-- **Calibración** con la vara de 1 m corregida por profundidad (altura de cámara 1.30 m): la vara y la
-  jugadora no están a la misma distancia de la cámara. Estatura aparente 1.58 m (lateral) y 1.59 m
-  (posterior) frente a 1.64 m reales (−3.5 %, atribuible a la postura nunca del todo erguida).
+> Una jugadora, 5 saques, cinemática 2D. Todo lo que compara saques es **exploratorio**.
+> Las figuras de esta sección son copias de `reports/figures/` guardadas en `docs/img/`.
+> Para actualizarlas después de correr el pipeline: `cp reports/figures/*.png docs/img/`.
+
+### Detección de saques e impacto
+
+Se detectan automáticamente los 5 saques en las dos vistas. El impacto se fecha con el fin de la caída
+de la pelota, y en los 5 casos el fotograma marcado muestra la pelota en las cuerdas.
+
+| Métrica | Valor |
+|---|---|
+| Saques detectados | 5 / 5 (impactos a los 5.0, 13.1, 22.8, 31.2 y 41.2 s del video lateral) |
+| Desfase entre vistas | posterior = lateral + 0.64 s (correlación de cadera 0.75) |
+| Fotogramas perdidos | 24 (lateral) y 15 (posterior), corregidos con el tiempo real de cada fotograma |
+| Estatura aparente (control de escala) | 1.58 m (lateral), 1.59 m (posterior); real 1.64 m |
+
+![Impactos, vista lateral](docs/img/impactos_lateral.png)
+![Impactos, vista posterior](docs/img/impactos_posterior.png)
+
+### Seguimiento de las estampitas
+
+Porcentaje de fotogramas en que la posición del marcador viene de la estampita (el resto usa
+MediaPipe corregido o queda como hueco):
+
+| Vista lateral | Hombro | Codo | Muñeca | Cadera | Rodilla | Tobillo | Punta |
+|---|---|---|---|---|---|---|---|
+| % estampita | 96 | 71 | 80 | 63 | 74 | 72 | 69 |
+
+En la vista posterior: cadera izq. 91 %, rodilla izq. 86 %, tobillos 64 % y 51 %.
+
+### Cinemática por saque (vista lateral)
+
+| Saque | Carga (ms) | Aceleración (ms) | Flexión máx. rodilla (°) | Altura máx. muñeca (m) | Rapidez pico muñeca (m/s) | ω pico codo (rad/s) | τ secuencia |
+|---|---|---|---|---|---|---|---|
+| 1 | 524 | 475 | 103 | 1.80 | 11.4\* | —† | 0.00 |
+| 2 | 574 | 433 | 105 | 1.79 | 6.2 | 58.6 | 0.95 |
+| 3 | 541 | 441 | 104 | 1.82 | 7.9 | 32.6 | 0.74 |
+| 4 | 391 | 550 | 105 | 1.77 | 6.2 | —† | 0.63 |
+| 5 | 383 | 533 | 107 | 1.79 | 6.5 | 54.5 | 0.60 |
+
+- Flexión de rodilla: ángulo interior mínimo (180° = pierna extendida).
+- τ de secuencia: τ de Kendall del orden muslo → tronco → brazo → codo → muñeca (1 = orden próximo-distal perfecto).
+- \* Probable artefacto: en ese saque el brazo de golpeo se pierde cerca del impacto.
+- † Excluido porque menos del 80 % de las muestras son válidas en los 200 ms previos al impacto.
+
+![Curvas por saque](docs/img/curvas_por_saque.png)
+
+### Indicadores de posible fatiga
+
+| Variable | Confianza | Cambio saque 1 → 5 | ρ Spearman | p (pendiente) |
+|---|---|---|---|---|
+| Duración de la carga | alta | −27 % | −0.7 | 0.09 |
+| Duración de la aceleración | alta | +12 % | +0.6 | 0.19 |
+| Flexión máx. de rodilla | alta | +3 % (menos flexión) | +0.7 | 0.07 |
+| Altura máx. de muñeca | alta | −0.7 % | −0.6 | 0.44 |
+| Rapidez pico de muñeca | media | −43 %\* | −0.5 | 0.18 |
+| ω pico de codo (n = 3) | baja | −7 % | −0.5 | 0.97 |
+
+**Lectura:** en los saques 4 y 5 la fase de carga se acorta (~390 ms frente a ~545 ms) y la rodilla se
+flexiona un poco menos. Ese patrón es compatible con un menor uso de las piernas al final de la serie,
+pero ningún indicador alcanza p < 0.05 y con 5 saques la evidencia de fatiga **no es concluyente**.
+Para confirmarlo harían falta series más largas, de unos 20–30 saques.
+
+![Tendencias de fatiga](docs/img/fatiga_tendencias.png)
 
 ## Limitaciones
 
