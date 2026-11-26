@@ -1,12 +1,35 @@
 # Contexto de las bases de datos cinemáticas
 
+> **Actualización (26-nov-2026).** La fuente principal ya no son los CSV de Kinovea sino los **videos
+> completos** (sección siguiente). Los CSV descritos más abajo se conservan en `data/raw/kinovea/`
+> como referencia histórica (un solo saque, tracking manual) y el pipeline actual no los usa.
+
+## Videos (fuente actual)
+
+| Archivo | Vista | Códec | Fotogramas | Duración | Fotogramas perdidos |
+|---|---|---|---:|---:|---|
+| `data/raw/video/lateral.mp4` | lateral (perfil; red y edificio al fondo) | H.264 | 5414 | 45.3 s | 24 en total: salto de 0.19 s tras el 1.º fotograma y otro a los 32.6 s |
+| `data/raw/video/posterior.mp4` | posterior (de espaldas; cerca verde al fondo) | HEVC | 5588 | 46.6 s | 15 tras el 1.º fotograma (0.13 s) |
+
+- Grabados en vertical (metadato de rotación −90°): imagen efectiva 1080×1920.
+- Frecuencia nominal 120 fps; real ≈ 120.16 fps (intervalos de 748–750/90000 s). El pipeline usa el
+  tiempo de presentación (pts) de cada fotograma y una malla uniforme con huecos donde faltan fotogramas.
+- Cada video contiene la serie completa de **5 saques** de la misma jugadora (1.64 m, 58 kg, diestra).
+- Vara de 1 m visible en ambas vistas (calibración en `config/pipeline.yaml`). En la vista posterior la
+  vara está más lejos de la cámara que la jugadora; el pipeline corrige la escala por profundidad con la
+  altura de cámara (1.30 m) → estatura aparente 1.59 m (sin corrección salía 2.30 m).
+- Archivos derivados: `data/interim/pose/<vista>.parquet` (landmarks en px, visibilidad, centroides de
+  estampita, pts) y `data/processed/<vista>/` (marcadores en m, cinemática, carpetas por saque).
+
+## CSV de Kinovea (histórico)
+
 ## Propósito y alcance
 
 Este documento describe los CSV disponibles para el análisis biomecánico del saque kick de tenis, obtenidos mediante seguimiento de marcadores en Kinovea desde una vista lateral y una vista posterior. Está pensado para acompañar a [`contexto_dinamica_inversa.md`](./contexto_dinamica_inversa.md) como contexto de entrada para construir un pipeline de análisis reproducible.
 
 Los archivos son tablas CSV, no bases de datos relacionales. Cada fila representa una muestra temporal y cada columna una variable. Los datos corresponden a exportaciones de análisis cinemático: posición/coordenadas, ángulos y variables derivadas de velocidad y aceleración. No hay identificadores de fotograma, sujeto, ensayo ni evento que permitan vincular inequívocamente las exportaciones.
 
-Se revisaron los archivos de `data/lateral/` y `data/posterior/`, además del CSV duplicado en `posterior/`. Todos tienen encabezados, filas de ancho consistente y valores no vacíos en todas las columnas observadas.
+Se revisaron los archivos de `data/raw/kinovea/lateral/` y `data/raw/kinovea/posterior/`, además del CSV duplicado en `posterior/`. Todos tienen encabezados, filas de ancho consistente y valores no vacíos en todas las columnas observadas.
 
 > **Unidades y definiciones:** los ángulos de las bases están en grados (°), no en radianes. `ABS` identifica el ángulo absoluto y `MA` el promedio móvil. `PI1` identifica la pierna izquierda y `PD` la pierna derecha. Los sufijos `_cm` indican centímetros; `tiempo_s` y `time_s` indican segundos, y `tiempo_ms` milisegundos. Las unidades de las variables lineales y el método/parámetros usados para el promedio móvil no están documentados en los CSV.
 
@@ -18,11 +41,11 @@ La cantidad indicada es el número de filas de datos, sin contar el encabezado. 
 
 | Archivo | Filas | Columnas y significado indicado por los nombres |
 |---|---:|---|
-| [`data/lateral/cinematica_lineal_lateral.csv`](./data/lateral/cinematica_lineal_lateral.csv) | 544 | `tiempo_s`; `x_cadera`, `y_cadera`; `x_rodilla`, `y_rodilla`; `x_tobillo`, `y_tobillo` (coordenadas de cadera, rodilla y tobillo); `v_cadera`, `v_rodilla`, `v_tobillo`; `a_cadera`, `a_rodilla`, `a_tobillo` (variables derivadas por punto). |
-| [`data/lateral/cinematica_angular_lateral_rodilla.csv`](./data/lateral/cinematica_angular_lateral_rodilla.csv) | 537 | `tiempo_s`; `angulo_rod`; `ABS_angulo_rod`; `angulo_MA_rod`; `v_rod`; `a_rod`. |
-| [`data/lateral/cinematica_angular_lateral_tobillo.csv`](./data/lateral/cinematica_angular_lateral_tobillo.csv) | 138 | `tiempo_s`; `angulo_tob`; `ABS_angulo_tob`; `angulo_MA_tob`; `v_tob`; `a_tob`. |
-| [`data/lateral/PI1_tiempo_angulo_abs_rodilla.csv`](./data/lateral/PI1_tiempo_angulo_abs_rodilla.csv) | 537 | `tiempo_ms`; `tiempo_s`; `angulo_PI1`; `ABS_angulo_PI1`; `angulo_MA_PI1`; `v_clean_PI1`; `a_clean_PI1`. |
-| [`data/lateral/PI1_tiempo_angulo_abs_tobillo.csv`](./data/lateral/PI1_tiempo_angulo_abs_tobillo.csv) | 138 | `tiempo_ms`; `tiempo_s`; `angulo_tob`; `ABS_angulo_tob`; `angulo_MA_tob`; `v_clean_tob`; `a_clean_tob`. |
+| [`data/raw/kinovea/lateral/cinematica_lineal_lateral.csv`](./data/raw/kinovea/lateral/cinematica_lineal_lateral.csv) | 544 | `tiempo_s`; `x_cadera`, `y_cadera`; `x_rodilla`, `y_rodilla`; `x_tobillo`, `y_tobillo` (coordenadas de cadera, rodilla y tobillo); `v_cadera`, `v_rodilla`, `v_tobillo`; `a_cadera`, `a_rodilla`, `a_tobillo` (variables derivadas por punto). |
+| [`data/raw/kinovea/lateral/cinematica_angular_lateral_rodilla.csv`](./data/raw/kinovea/lateral/cinematica_angular_lateral_rodilla.csv) | 537 | `tiempo_s`; `angulo_rod`; `ABS_angulo_rod`; `angulo_MA_rod`; `v_rod`; `a_rod`. |
+| [`data/raw/kinovea/lateral/cinematica_angular_lateral_tobillo.csv`](./data/raw/kinovea/lateral/cinematica_angular_lateral_tobillo.csv) | 138 | `tiempo_s`; `angulo_tob`; `ABS_angulo_tob`; `angulo_MA_tob`; `v_tob`; `a_tob`. |
+| [`data/raw/kinovea/lateral/PI1_tiempo_angulo_abs_rodilla.csv`](./data/raw/kinovea/lateral/PI1_tiempo_angulo_abs_rodilla.csv) | 537 | `tiempo_ms`; `tiempo_s`; `angulo_PI1`; `ABS_angulo_PI1`; `angulo_MA_PI1`; `v_clean_PI1`; `a_clean_PI1`. |
+| [`data/raw/kinovea/lateral/PI1_tiempo_angulo_abs_tobillo.csv`](./data/raw/kinovea/lateral/PI1_tiempo_angulo_abs_tobillo.csv) | 138 | `tiempo_ms`; `tiempo_s`; `angulo_tob`; `ABS_angulo_tob`; `angulo_MA_tob`; `v_clean_tob`; `a_clean_tob`. |
 
 En los archivos angulares laterales, `rod`/`tob` identifican rodilla/tobillo. Los archivos con `PI1` en el nombre corresponden a la pierna izquierda.
 
@@ -34,18 +57,18 @@ de fuerza externa nula en tobillo; no produce una estimación de torque de tobil
 
 | Archivo | Filas | Columnas y significado indicado por los nombres |
 |---|---:|---|
-| [`data/posterior/cinematica_angular_rodilla.csv`](./data/posterior/cinematica_angular_rodilla.csv) | 282 | `Tiempo (ms)`; `tiempo_s`; `Angulo_Rod`; `angulo_MA_Rod`; `v_Rod`; `a_Rod`. |
-| [`data/posterior/cinematica_angular_tobillo.csv`](./data/posterior/cinematica_angular_tobillo.csv) | 282 | `tiempo_ms`; `tiempo_s`; `angulo_tob`; `angulo_MA_tob`; `v_tob`; `a_tob`. |
-| [`data/posterior/cinematica_angular_brazo.csv`](./data/posterior/cinematica_angular_brazo.csv) | 282 | `tiempo_ms`; `tiempo_s`; `angulo_codo`; `angulo_codo_clean`; `v_codo`; `a_codo`. |
-| [`data/posterior/cinematica_posterior_PD.xlsx.csv`](./data/posterior/cinematica_posterior_PD.xlsx.csv) | 348 | `time_s`; `x_punta_cm`, `y_punta_cm`; `x_tob_cm`, `y_tob_cm`; `x_rod_cm`, `y_rod_cm`; `X_cad_cm`, `y_cad_cm` (coordenadas de punta del pie, tobillo, rodilla y cadera); `v_punta`, `v_tob`, `v_rod`, `v_cad`; `a_punta`, `a_tob`, `a_rod`, `a_cad`. |
-| [`data/posterior/cinematica_lineal_brazo_pos.csv`](./data/posterior/cinematica_lineal_brazo_pos.csv) | 356 | `time_s`; `x_mun_cm`, `y_mun_cm`; `x_codo_cm`, `y_codo_cm`; `x_homb_cm`, `y_homb_cm` (muñeca, codo y hombro). |
-| [`data/posterior/cinematica_lineal_brazo_v_a.csv`](./data/posterior/cinematica_lineal_brazo_v_a.csv) | 356 | `tiempo_ms`; `v_mun`, `v_codo`, `v_homb`; `a_mun`, `a_codo`, `a_homb` (muñeca, codo y hombro). |
+| [`data/raw/kinovea/posterior/cinematica_angular_rodilla.csv`](./data/raw/kinovea/posterior/cinematica_angular_rodilla.csv) | 282 | `Tiempo (ms)`; `tiempo_s`; `Angulo_Rod`; `angulo_MA_Rod`; `v_Rod`; `a_Rod`. |
+| [`data/raw/kinovea/posterior/cinematica_angular_tobillo.csv`](./data/raw/kinovea/posterior/cinematica_angular_tobillo.csv) | 282 | `tiempo_ms`; `tiempo_s`; `angulo_tob`; `angulo_MA_tob`; `v_tob`; `a_tob`. |
+| [`data/raw/kinovea/posterior/cinematica_angular_brazo.csv`](./data/raw/kinovea/posterior/cinematica_angular_brazo.csv) | 282 | `tiempo_ms`; `tiempo_s`; `angulo_codo`; `angulo_codo_clean`; `v_codo`; `a_codo`. |
+| [`data/raw/kinovea/posterior/cinematica_posterior_PD.xlsx.csv`](./data/raw/kinovea/posterior/cinematica_posterior_PD.xlsx.csv) | 348 | `time_s`; `x_punta_cm`, `y_punta_cm`; `x_tob_cm`, `y_tob_cm`; `x_rod_cm`, `y_rod_cm`; `X_cad_cm`, `y_cad_cm` (coordenadas de punta del pie, tobillo, rodilla y cadera); `v_punta`, `v_tob`, `v_rod`, `v_cad`; `a_punta`, `a_tob`, `a_rod`, `a_cad`. |
+| [`data/raw/kinovea/posterior/cinematica_lineal_brazo_pos.csv`](./data/raw/kinovea/posterior/cinematica_lineal_brazo_pos.csv) | 356 | `time_s`; `x_mun_cm`, `y_mun_cm`; `x_codo_cm`, `y_codo_cm`; `x_homb_cm`, `y_homb_cm` (muñeca, codo y hombro). |
+| [`data/raw/kinovea/posterior/cinematica_lineal_brazo_v_a.csv`](./data/raw/kinovea/posterior/cinematica_lineal_brazo_v_a.csv) | 356 | `tiempo_ms`; `v_mun`, `v_codo`, `v_homb`; `a_mun`, `a_codo`, `a_homb` (muñeca, codo y hombro). |
 
 El archivo de coordenadas `cinematica_posterior_PD.xlsx.csv` corresponde a la pierna derecha. La grafía `X_cad_cm` (mayúscula) es el encabezado real y debe respetarse al leer el archivo.
 
 ### Archivo adicional fuera de `data/`
 
-[`posterior/cinematica_angular_rodilla.csv`](./posterior/cinematica_angular_rodilla.csv) contiene 282 filas y los mismos encabezados que `data/posterior/cinematica_angular_rodilla.csv`. Los dos archivos son idénticos byte por byte; deben tratarse como una sola exportación y evitar contarlos como ensayos diferentes.
+[`posterior/cinematica_angular_rodilla.csv`](./posterior/cinematica_angular_rodilla.csv) contiene 282 filas y los mismos encabezados que `data/raw/kinovea/posterior/cinematica_angular_rodilla.csv`. Los dos archivos son idénticos byte por byte; deben tratarse como una sola exportación y evitar contarlos como ensayos diferentes.
 
 ## Extensión temporal y muestreo observado
 

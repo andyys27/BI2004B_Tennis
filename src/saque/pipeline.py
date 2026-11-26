@@ -1,184 +1,382 @@
-"""Orquestación M1→M6: catálogo → lectura → QC → sync → filtrado → cinemática."""
+"""Orquestación del pipeline: video -> pose -> marcadores -> cinemática -> saques -> fatiga -> reporte.
+
+Etapas (cada una lee lo que dejó la anterior en disco, así que se pueden repetir por separado):
+  pose      MediaPipe + estampitas sobre los videos completos (caché en data/interim/pose)
+  kinematics marcadores calibrados, QC, filtrado y θ/ω/α del registro completo por vista
+  serves    detección de los saques, ventanas y sincronización entre vistas
+  analysis  eventos, secuencia, Jacobiano y dinámica inversa por saque; fatiga y variabilidad
+  report    figuras y reporte Markdown
+"""
 from __future__ import annotations
+
+from dataclasses import dataclass, field
 from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
-from .catalog import build_catalog, valid_files
-from .config import load_config, load_yaml
-from .io_kinovea import read_kinovea
-from .qc import QCLog, clean_time, fill_short_gaps, mask_outliers, time_report
-from .sync import apply_offset, merge_on_grid
-from .filtering import butter_lp, savgol, winter_cutoff
-from .kinematics import compute_kinematics
-from .jacobian import jacobian_from_kinematics
-from .events import detect_events, phase_table, peak_times, sequence_metrics
+from .analysis.events import detect_events, peak_times, phase_table, sequence_metrics, time_normalize
+from .analysis.fatigue import fatigue_index, per_serve_values, phase_duration_values, trend_table
+from .analysis.inverse_dynamics import run_serve_inverse_dynamics
+from .analysis.jacobian import jacobian_from_kinematics
+from .analysis.serves import (detect_impacts, estimate_lag, manual_impacts, serve_windows,
+                              shift_impacts, view_offset)
+from .analysis.stats import describe_series, intertrial_variability
+from .config import DEFAULT_CONFIG, Paths, load_config
+from .processing.filtering import butter_lp_gaps, longest_run, winter_cutoff
+from .processing.kinematics import compute_kinematics
+from .processing.markers import (Calibration, fuse_markers, implied_height_m, mask_segment_length,
+                                 mask_speed, to_metric)
+from .processing.qc import QCLog, fill_short_gaps, markers_in, mask_outliers
+from .video.pose import load_pose
+
+STAGES = ("pose", "kinematics", "serves", "analysis", "report")
 
 
-def _auto_angle_cols(df: pd.DataFrame) -> list[str]:
-    return [c for c in df.columns if c.startswith("angulo_") and c.split("__")[0].endswith("_rad")
-            and "_ma_" not in c and "_clean" not in c]
+@dataclass
+class Context:
+    cfg: dict
+    paths: Paths
+    log: QCLog = field(default_factory=QCLog)
+    warnings: list[str] = field(default_factory=list)
+
+    @property
+    def side(self) -> str:
+        return self.cfg["subject"]["hitting_side"]
+
+    @property
+    def wrist(self) -> str:
+        return f"muneca_{self.side}"
+
+    def view_dir(self, view: str) -> Path:
+        d = self.paths.processed / view
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def table(self, df: pd.DataFrame, name: str) -> Path:
+        self.paths.tables.mkdir(parents=True, exist_ok=True)
+        p = self.paths.tables / f"{name}.csv"
+        df.to_csv(p, index=False)
+        return p
 
 
-def _filter_series(x, fs, fcfg, label, rows):
-    """Filtra una serie; elige fc por Winter si no hay fc fija. Registra la decisión."""
-    if fcfg.get("type") == "savgol":
-        rows.append(dict(serie=label, fc_hz=None, metodo="savgol"))
-        return savgol(x, fs, fcfg.get("savgol_window", 15), fcfg.get("savgol_poly", 3))
-    if fcfg.get("cutoff_hz"):
-        fc, metodo = float(fcfg["cutoff_hz"]), "fijo"
-    else:
-        w = winter_cutoff(x, fs, tuple(fcfg["cutoff_range_hz"]), fallback=fcfg["fallback_cutoff_hz"])
-        fc, metodo = w["fc"], w["metodo"]
-    rows.append(dict(serie=label, fc_hz=round(fc, 2), metodo=metodo))
-    return butter_lp(x, fs, fc, fcfg["order"])
+# ---------------------------------------------------------------- etapa: cinemática por vista
+def _filter_markers(df: pd.DataFrame, fs: float, fcfg: dict, view: str) -> tuple[pd.DataFrame, list]:
+    """Butterworth por marcador; fc por análisis de residuos (una fc común a x e y)."""
+    out, rows = df.copy(), []
+    for m in markers_in(df):
+        x, y = df[f"x_{m}"].to_numpy(float), df[f"y_{m}"].to_numpy(float)
+        if fcfg.get("cutoff_hz"):
+            fc, metodo = float(fcfg["cutoff_hz"]), "fijo"
+        else:
+            cands = [winter_cutoff(longest_run(s), fs, tuple(fcfg["cutoff_range_hz"]),
+                                   fallback=fcfg["fallback_cutoff_hz"])
+                     for s in (x, y) if len(longest_run(s)) > 60]
+            fc = float(np.median([c["fc"] for c in cands])) if cands else fcfg["fallback_cutoff_hz"]
+            metodo = cands[0]["metodo"] if cands else "fallback_sin_datos"
+        out[f"x_{m}"] = butter_lp_gaps(x, fs, fc, fcfg["order"])
+        out[f"y_{m}"] = butter_lp_gaps(y, fs, fc, fcfg["order"])
+        rows.append(dict(vista=view, marcador=m, fc_hz=round(fc, 2), metodo=metodo))
+    return out, rows
 
 
-def run(raw_dir="data/raw", config="config/pipeline.yaml", offsets="config/sync_offsets.yaml",
-        out_dir=".", use_hypothesis=False) -> dict:
-    cfg = load_config(config)
-    off_cfg = load_yaml(offsets)
-    raw_dir, out = Path(raw_dir), Path(out_dir)
-    interim_dir = out / "data/interim/synchronized"
-    filtered_dir = out / "data/processed/filtered"
-    kinematics_dir = out / "data/processed/kinematics"
-    jacobian_dir = out / "data/processed/jacobian"
-    for directory in (interim_dir, filtered_dir, kinematics_dir, jacobian_dir):
-        directory.mkdir(parents=True, exist_ok=True)
-    table_dirs = {
-        "catalog": out / "reports/tables/catalog",
-        "qc": out / "reports/tables/qc",
-        "synchronization": out / "reports/tables/synchronization",
-        "filtering": out / "reports/tables/filtering",
-        "jacobian": out / "reports/tables/jacobian",
-    }
-    for directory in table_dirs.values():
-        directory.mkdir(parents=True, exist_ok=True)
-    fs, log = float(cfg["resample_hz"]), QCLog()
+def _mask_implausible_omega(kin: pd.DataFrame, max_omega: float, log: QCLog, view: str) -> pd.DataFrame:
+    """ω (y su α) por encima del límite de plausibilidad -> NaN (error de marcador o escorzo 2D)."""
+    for c in [c for c in kin if c.startswith("omega_")]:
+        bad = np.abs(kin[c].to_numpy(float)) > max_omega
+        if bad.any():
+            kin.loc[bad, [c, c.replace("omega_", "alpha_", 1)]] = np.nan
+            log.add(view, "omega_implausible", f"{c}: {int(bad.sum())} muestras a NaN",
+                    detalle=f"|ω|>{max_omega} rad/s")
+    return kin
 
-    # M1
-    cat = build_catalog(raw_dir)
-    cat.drop(columns="columnas").to_csv(table_dirs["catalog"] / "catalogo.csv", index=False)
-    usable = set(valid_files(cat))
-    for _, r in cat[~cat["usar"]].iterrows():
-        log.add(r["archivo"], "archivo_duplicado", f"excluido (idéntico a {r['duplicado_de']})")
 
-    decisions, filt_rows, time_rows, results, jac_rows = [], [], [], {}, []
-    for gname, g in cfg["groups"].items():
-        files = g["files"]
-        missing = [f for f in files if f not in usable]
-        if missing:
-            log.add(gname, "grupo_omitido", f"archivos no disponibles: {missing}")
+def process_view(ctx: Context, view: str) -> dict:
+    cfg, vcfg = ctx.cfg, ctx.cfg["views"][view]
+    pose = load_pose(ctx.paths.pose / f"{view}.parquet", ctx.paths.video(view, cfg))
+    fs = pose.attrs["fps"]
+    px, src = fuse_markers(pose, cfg["pose"]["min_visibility"], cfg["stickers"]["max_offset_mad"],
+                           sticker_markers=vcfg.get("stickers", []))
+    src.insert(0, "vista", view)
+    calib = Calibration.from_config(vcfg, px)
+    m = to_metric(px.drop(columns=[c for c in px if c.startswith("src_")]), calib)
+    m = mask_segment_length(m, vcfg.get("segments", {}), cfg["qc"]["segment_length_tol"],
+                            cfg["qc"]["segment_jump_tol"], ctx.log, view)
+    m = mask_speed(m, fs, cfg["qc"]["max_marker_speed_m_s"], ctx.log, view)
+    m = mask_outliers(m, view, ctx.log, cfg["qc"]["jump_z"], cfg["qc"]["jump_min_rel"])
+    m = fill_short_gaps(m, view, ctx.log, cfg["qc"]["max_gap_s"])
+    filt, frows = _filter_markers(m, fs, cfg["filter"], view)
+    kin = compute_kinematics(filt, fs, vcfg.get("segments"), vcfg.get("joints"),
+                             vcfg.get("linear"))
+    kin = _mask_implausible_omega(kin, cfg["qc"]["max_omega_rad_s"], ctx.log, view)
+    kin.insert(1, "frame", pose["frame"].to_numpy())
+    d = ctx.view_dir(view)
+    px.to_parquet(d / "markers_px.parquet", index=False)
+    filt.to_parquet(d / "markers_filtered.parquet", index=False)
+    kin.to_parquet(d / "kinematics.parquet", index=False)
+    cal = dict(vista=view, metodo=vcfg["calibration"].get("method", "pole"),
+               m_por_px=calib.m_per_px, px_por_m=1 / calib.m_per_px,
+               estatura_aparente_m=implied_height_m(filt),
+               estatura_real_m=cfg["subject"]["height_m"], fps=fs,
+               n_fotogramas=int(pose["frame"].notna().sum()),
+               fotogramas_perdidos=pose.attrs["fotogramas_perdidos"],
+               frac_detectado=float(pose["detected"].mean()))
+    return dict(sources=src, filters=frows, calibration=cal)
+
+
+def stage_kinematics(ctx: Context) -> None:
+    srcs, filt_rows, cals = [], [], []
+    for view in ctx.cfg["views"]:
+        r = process_view(ctx, view)
+        srcs.append(r["sources"]), filt_rows.extend(r["filters"]), cals.append(r["calibration"])
+    ctx.table(pd.concat(srcs, ignore_index=True), "fuente_marcadores")
+    ctx.table(pd.DataFrame(filt_rows), "filtros")
+    cal = pd.DataFrame(cals)
+    ctx.table(cal, "calibracion")
+    for _, r in cal.iterrows():
+        err = abs(r["estatura_aparente_m"] / r["estatura_real_m"] - 1)
+        if np.isfinite(err) and err > 0.10:
+            ctx.warnings.append(
+                f"Calibración {r['vista']}: estatura aparente {r['estatura_aparente_m']:.2f} m vs "
+                f"{r['estatura_real_m']:.2f} m ({err:.0%}); revisar vara/altura de cámara: "
+                "magnitudes lineales (m, m/s, N) con error de escala; ángulos no afectados.")
+    ctx.table(ctx.log.to_df(), "qc_log")
+
+
+# ---------------------------------------------------------------- etapa: saques
+def load_kin(ctx: Context, view: str) -> pd.DataFrame:
+    return pd.read_parquet(ctx.view_dir(view) / "kinematics.parquet")
+
+
+def _mid_hip_height(kin: pd.DataFrame) -> np.ndarray:
+    cols = [c for c in ("y_cadera_izq", "y_cadera_der") if c in kin]
+    return kin[cols].mean(axis=1).to_numpy(float)
+
+
+def _reference_impacts(ctx: Context, view: str, kin: pd.DataFrame) -> pd.DataFrame:
+    """Impactos de la vista de referencia: candidatos por muñeca + fin de caída de la pelota."""
+    from .video.ball import BallParams, ball_impact_time
+    from .video.reader import frame_times, probe
+
+    scfg = ctx.cfg["serves"]
+    manual = (scfg.get("manual_impacts_s") or {}).get(view)
+    if manual:
+        return manual_impacts(manual).assign(metodo="manual")
+    cand = detect_impacts(kin["time_s"], kin[f"y_{ctx.wrist}"], kin[f"speed_{ctx.wrist}"],
+                          scfg["expected"], scfg["min_separation_s"])
+    cand["metodo"] = "proxy_rapidez_muneca"
+    if scfg.get("impact_method", "ball") != "ball":
+        return cand
+    info = probe(ctx.paths.video(view, ctx.cfg))
+    times = frame_times(info)
+    bp = BallParams.from_config(ctx.cfg["views"][view].get("ball", {}))
+    for i, row in cand.iterrows():
+        r = ball_impact_time(info, times, row["t_altura"], bp)
+        if np.isfinite(r["t_impacto"]):
+            cand.loc[i, ["t_impacto", "metodo"]] = [r["t_impacto"], r["metodo"]]
+            cand.loc[i, "puntos_pelota"] = r["n_puntos"]
+        else:
+            ctx.warnings.append(f"{view} saque {row['saque']}: no se siguió la pelota; impacto = "
+                                "proxy de rapidez de muñeca.")
+    return cand
+
+
+def stage_serves(ctx: Context) -> pd.DataFrame:
+    scfg = ctx.cfg["serves"]
+    ref = scfg["reference_view"]
+    kins = {v: load_kin(ctx, v) for v in ctx.cfg["views"]}
+    impacts = {ref: _reference_impacts(ctx, ref, kins[ref])}
+    if len(impacts[ref]) != scfg["expected"]:
+        ctx.warnings.append(f"{ref}: se detectaron {len(impacts[ref])} saques (esperados "
+                            f"{scfg['expected']}); revisar `serves.manual_impacts_s`.")
+    sync = []
+    for view, kin in kins.items():
+        if view == ref:
             continue
+        lag = estimate_lag(kins[ref]["time_s"], _mid_hip_height(kins[ref]),
+                           kin["time_s"], _mid_hip_height(kin), fs=120.0)
+        impacts[view] = shift_impacts(impacts[ref], lag["lag_s"])
+        # Control: impactos por muñeca detectados de forma independiente en esta vista.
+        own = detect_impacts(kin["time_s"], kin[f"y_{ctx.wrist}"], kin[f"speed_{ctx.wrist}"],
+                             scfg["expected"], scfg["min_separation_s"])
+        check = view_offset(impacts[view], own)
+        sync.append(dict(vista=view, referencia=ref, lag_s=lag["lag_s"],
+                         correlacion_cadera=lag["correlacion"],
+                         control_diferencia_muneca_mediana_s=check["offset_s"],
+                         control_dispersion_s=check["dispersion_s"]))
+        if lag["correlacion"] < 0.5:
+            ctx.warnings.append(f"Sincronización {view}->{ref}: correlación baja "
+                                f"({lag['correlacion']:.2f}); revisar.")
+    rows = []
+    for view, imp in impacts.items():
+        kin = kins[view]
+        win = serve_windows(imp, scfg["pre_impact_s"], scfg["post_impact_s"],
+                            float(kin["time_s"].iloc[0]), float(kin["time_s"].iloc[-1]))
+        rows.append(win.merge(imp, on=["saque", "t_impacto"]).assign(vista=view))
+    table = pd.concat(rows, ignore_index=True)
+    ctx.table(table, "saques")
+    ctx.table(pd.DataFrame(sync), "sincronizacion")
+    return table
 
-        # M2–M4 por archivo
-        series, skip = {}, False
-        for f in files:
-            unit = cfg["coord_unit_overrides"].get(f)
-            df = read_kinovea(raw_dir / f, coord_unit=unit)
-            df = clean_time(df, f, log, cfg["qc"]["duplicate_time_policy"])             # M3
-            df = mask_outliers(df, f, log, cfg["qc"]["jump_z"], cfg["qc"]["jump_min_rel"])
-            df = fill_short_gaps(df, f, log, cfg["qc"]["max_gap_s"])
-            time_rows.append(dict(archivo=f, **time_report(df)))
-            entry = off_cfg.get(f, {})
-            if entry.get("offset_s") is not None:                                         # M4
-                off, estado = float(entry["offset_s"]), "verificado"
-            elif entry.get("hypothesis_s") is not None:
-                if not use_hypothesis:
-                    log.add(gname, "grupo_omitido", f"offset sin verificar en {f} (usar --use-hypothesis)")
-                    skip = True
-                    break
-                off, estado = float(entry["hypothesis_s"]), "HIPOTESIS_NO_VERIFICADA"
-            else:
-                off, estado = 0.0, "sin_entrada"
-            decisions.append(dict(grupo=gname, archivo=f, offset_s=off, estado=estado))
-            series[f] = apply_offset(df, off)
-        if skip:
-            continue
-        merged, info = merge_on_grid({Path(k).stem: v for k, v in series.items()}, fs)
-        merged.attrs["coord_unit"] = next((v.attrs.get("coord_unit") for v in series.values()
-                                           if v.attrs.get("coord_unit")), None)
-        decisions.append(dict(grupo=gname, archivo="(intervalo común)", offset_s=None,
-                              estado=f"{info['t0']:.3f}-{info['t1']:.3f} s, n={info['n']}"))
-        merged.to_csv(interim_dir / f"{gname}_merged.csv", index=False)
 
-        # M5: filtrado (coordenadas por marcador; ángulos por columna)
-        filt = merged.copy()
-        markers = sorted({c[2:] for c in merged if c.startswith("x_") and f"y_{c[2:]}" in merged})
-        for m in markers:
-            if merged[[f"x_{m}", f"y_{m}"]].isna().any().any():
-                log.add(gname, "filtrado_omitido", f"marcador {m} con NaN")
+# ---------------------------------------------------------------- etapa: análisis por saque
+def _series(kin: pd.DataFrame, col: str):
+    return (kin["time_s"].to_numpy(), kin[col].to_numpy()) if col in kin else None
+
+
+def analyze_serve(ctx: Context, view: str, kin: pd.DataFrame, filt: pd.DataFrame,
+                  w: pd.Series) -> dict:
+    m = (kin["time_s"] >= w["t_ini"]) & (kin["time_s"] <= w["t_fin"])
+    k, f = kin.loc[m].reset_index(drop=True), filt.loc[m].reset_index(drop=True)
+    s = int(w["saque"])
+    ser = {"wrist_speed": _series(k, f"speed_{ctx.wrist}"),
+           "knee_angle": _series(k, "theta_interior_rodilla"),
+           "elbow_angle": _series(k, "theta_interior_codo"),
+           "elbow_omega": _series(k, "omega_interior_codo")}
+    ser = {a: b for a, b in ser.items() if b is not None}
+    ecfg = ctx.cfg["events"]
+    ev = detect_events(ser, manual={"impacto": float(w["t_impacto"])},
+                       start_frac=ecfg["start_frac"], end_frac=ecfg["end_frac"])
+    for msg in ev.pop("_warnings"):
+        ctx.warnings.append(f"{view} saque {s}: {msg}")
+    events = pd.DataFrame([dict(vista=view, saque=s, evento=e, **v) for e, v in ev.items()])
+    phases = phase_table(ev).assign(vista=view, saque=s)
+    out = dict(events=events, phases=phases, kin=k, ev=ev)
+
+    order = list((ecfg.get("sequence") or {}).keys())
+    seq_series = {lab: _series(k, col) for lab, col in (ecfg.get("sequence") or {}).items()}
+    seq_series = {a: b for a, b in seq_series.items() if b is not None}
+    if order and len(seq_series) == len(order):          # solo con la cadena completa
+        peaks = peak_times(seq_series, (ev["inicio"]["t"], ev["impacto"]["t"] + ecfg["sequence_margin_s"]))
+        sm = sequence_metrics(peaks, order)
+        out["peaks"] = pd.DataFrame([dict(vista=view, saque=s, serie=a,
+                                          t_rel_impacto_ms=1000 * (b["t"] - ev["impacto"]["t"]),
+                                          amplitud=b["amp"]) for a, b in peaks.items()])
+        out["sequence"] = pd.DataFrame([dict(vista=view, saque=s, orden=" > ".join(sm["labels"]),
+                                             tau_kendall=sm["tau"], nota=sm["nota"],
+                                             lags_ms=";".join(f"{x:.0f}" for x in sm["lags_ms"]))])
+
+    vcfg = ctx.cfg["views"][view]
+    if vcfg.get("jacobian"):
+        jt, met = jacobian_from_kinematics(k, f, **vcfg["jacobian"])
+        out["jacobian"] = jt
+        out["jacobian_metrics"] = pd.DataFrame([dict(vista=view, saque=s, **met)])
+    idcfg = ctx.cfg["inverse_dynamics"]
+    if idcfg.get("enabled") and idcfg.get("view") == view:
+        out["inverse_dynamics"] = run_serve_inverse_dynamics(
+            k, f, vcfg, ctx.cfg["subject"]["body_mass_kg"], idcfg["anthropometry"])
+    return out
+
+
+def _normalized_curves(results: dict[int, dict], variables: dict) -> pd.DataFrame:
+    """Curvas inicio->impacto normalizadas a 0-100 % para comparar saques."""
+    rows = []
+    for s, r in results.items():
+        t0, t1 = r["ev"]["inicio"]["t"], r["ev"]["impacto"]["t"]
+        k = r["kin"]
+        for name, spec in variables.items():
+            col = spec["column"]
+            if col not in k or t1 <= t0:
                 continue
-            tmp = []
-            fx = _filter_series(merged[f"x_{m}"].to_numpy(), fs, cfg["filter"], f"x_{m}", tmp)
-            fy = _filter_series(merged[f"y_{m}"].to_numpy(), fs, cfg["filter"], f"y_{m}", tmp)
-            if cfg["filter"].get("cutoff_hz") is None and cfg["filter"].get("type") != "savgol":
-                fc = float(np.median([t["fc_hz"] for t in tmp]))      # una fc por marcador (x e y)
-                fx, fy = (butter_lp(merged[f"{a}_{m}"].to_numpy(), fs, fc, cfg["filter"]["order"]) for a in "xy")
-                tmp = [dict(serie=f"marcador_{m}", fc_hz=round(fc, 2), metodo=tmp[0]["metodo"])]
-            filt[f"x_{m}"], filt[f"y_{m}"] = fx, fy
-            filt_rows += [dict(grupo=gname, **t) for t in tmp]
-        angle_cols = g.get("angle_cols", "auto")
-        angle_cols = _auto_angle_cols(merged) if angle_cols == "auto" else angle_cols
-        for c in angle_cols:
-            tmp = []
-            filt[c] = _filter_series(np.unwrap(merged[c].to_numpy()), fs, cfg["filter"], c, tmp)
-            filt_rows += [dict(grupo=gname, **t) for t in tmp]
-        filt.to_csv(filtered_dir / f"{gname}_filtered.csv", index=False)
-
-        # M6: cinemática
-        kin = compute_kinematics(filt, fs, g.get("segments"), g.get("joints"), g.get("linear"),
-                                 angle_cols, cfg["flip_y"])
-        kin.to_csv(kinematics_dir / f"{gname}_kinematics.csv", index=False)
-        results[gname] = kin
-
-        # M8: Jacobiano (si el grupo lo declara)
-        if g.get("jacobian"):
-            jt, met = jacobian_from_kinematics(kin, filt, **g["jacobian"])
-            jt.to_csv(jacobian_dir / f"{gname}_jacobian.csv", index=False)
-            jac_rows.append(dict(grupo=gname, **met))
-
-    log.to_df().to_csv(table_dirs["qc"] / "qc_log.csv", index=False)
-    pd.DataFrame(time_rows).to_csv(table_dirs["qc"] / "time_report.csv", index=False)
-    pd.DataFrame(filt_rows).to_csv(table_dirs["filtering"] / "filtros.csv", index=False)
-    pd.DataFrame(decisions).to_csv(table_dirs["synchronization"] / "decisiones_sync.csv", index=False)
-    pd.DataFrame(jac_rows).to_csv(table_dirs["jacobian"] / "validacion.csv", index=False)
-    return dict(results=results, log=log.to_df(), catalog=cat, jacobian=pd.DataFrame(jac_rows))
+            ok = np.isfinite(k[col].to_numpy(float))
+            if ok.sum() < 4:
+                continue
+            y = time_normalize(k["time_s"][ok], k[col][ok], t0, t1)
+            rows += [dict(variable=name, trial=f"saque_{s}", percent=p, value=v)
+                     for p, v in zip(np.linspace(0, 100, len(y)), y)]
+    return pd.DataFrame(rows)
 
 
-def _load_series(out: Path, spec: dict):
-    f = out / f"data/processed/kinematics/{spec['group']}_kinematics.csv"
-    if not f.exists():
-        return None
-    d = pd.read_csv(f)
-    return (d["time_s"].to_numpy(), d[spec["column"]].to_numpy()) if spec["column"] in d else None
+def stage_analysis(ctx: Context) -> dict:
+    serves = pd.read_csv(ctx.paths.tables / "saques.csv")
+    acc: dict[str, list] = {k: [] for k in ("events", "phases", "peaks", "sequence",
+                                           "jacobian_metrics", "descriptives")}
+    fat_view = ctx.cfg["fatigue"]["view"]
+    fat_results = {}
+    for view in ctx.cfg["views"]:
+        kin = load_kin(ctx, view)
+        filt = pd.read_parquet(ctx.view_dir(view) / "markers_filtered.parquet")
+        for _, w in serves[serves["vista"] == view].iterrows():
+            r = analyze_serve(ctx, view, kin, filt, w)
+            s = int(w["saque"])
+            sd = ctx.view_dir(view) / f"saque_{s:02d}"
+            sd.mkdir(exist_ok=True)
+            r["kin"].to_csv(sd / "kinematics.csv", index=False)
+            if "jacobian" in r:
+                r["jacobian"].to_csv(sd / "jacobian.csv", index=False)
+            for name, df in (r.get("inverse_dynamics") or {}).items():
+                df.to_csv(sd / f"dinamica_inversa_{name}.csv", index=False)
+            for key in acc:
+                if key in r:
+                    acc[key].append(r[key])
+            for _, ph in r["phases"].iterrows():
+                for var, spec in ctx.cfg["fatigue"]["variables"].items():
+                    if spec["column"] in r["kin"]:
+                        try:
+                            row = describe_series(r["kin"]["time_s"], r["kin"][spec["column"]],
+                                                  variable=var, trial=f"saque_{s}", phase=ph["fase"],
+                                                  start_s=ph["t_ini"], end_s=ph["t_fin"])
+                            acc["descriptives"].append(pd.DataFrame([dict(vista=view, **row)]))
+                        except ValueError:
+                            pass
+            if view == fat_view:
+                fat_results[s] = r
+    for key, frames in acc.items():
+        if frames:
+            ctx.table(pd.concat(frames, ignore_index=True), key)
+
+    # Fatiga y variabilidad entre saques (vista configurada).
+    variables = ctx.cfg["fatigue"]["variables"]
+    win = serves[serves["vista"] == fat_view].copy()
+    win["t_fin_analisis"] = win["t_impacto"] + ctx.cfg["events"]["sequence_margin_s"]
+    starts = {s: r["ev"]["inicio"]["t"] for s, r in fat_results.items()}
+    win["t_ini"] = win["saque"].map(starts).fillna(win["t_ini"])
+    values = per_serve_values({s: r["kin"] for s, r in fat_results.items()}, win, variables,
+                              min_valid_frac=ctx.cfg["fatigue"].get("min_valid_frac", 0.8))
+    phases = pd.concat([r["phases"] for r in fat_results.values()], ignore_index=True) \
+        if fat_results else pd.DataFrame()
+    values = pd.concat([values, phase_duration_values(phases)], ignore_index=True)
+    trends = trend_table(values)
+    perf = [v for v in variables if v.startswith(("rapidez", "omega"))]
+    index = fatigue_index(values, perf)
+    ctx.table(values, "fatiga_valores_por_saque")
+    ctx.table(trends, "fatiga_tendencias")
+    ctx.table(index, "fatiga_indice")
+    curves = _normalized_curves(fat_results, variables)
+    bands, rmsd = [], []
+    for var, g in curves.groupby("variable"):
+        band, att = intertrial_variability(g[["trial", "percent", "value"]])
+        bands.append(band.assign(variable=var)), rmsd.append(att.assign(variable=var))
+    if bands:
+        ctx.table(curves, "curvas_normalizadas")
+        ctx.table(pd.concat(bands), "variabilidad_banda")
+        ctx.table(pd.concat(rmsd), "variabilidad_rmsd")
+    return dict(values=values, trends=trends, index=index)
 
 
-def run_events(out_dir=".", config="config/pipeline.yaml") -> dict:
-    """M7: eventos, fases y secuencia próximo-distal a partir de las series cinemáticas."""
-    cfg, out = load_config(config), Path(out_dir)
-    ecfg = cfg.get("events") or {}
-    series = {k: _load_series(out, v) for k, v in (ecfg.get("series") or {}).items()}
-    series = {k: v for k, v in series.items() if v is not None}
-    if "wrist_speed" not in series:
-        raise RuntimeError("M7 requiere la serie 'wrist_speed' (M6 del grupo del brazo).")
-    ev = detect_events(series, manual=ecfg.get("manual"))
-    warns = list(ev.pop("_warnings"))
-    if not ecfg.get("shared_clock_verified", False):
-        warns.append("RELOJ COMPARTIDO NO VERIFICADO: eventos entre grupos distintos son exploratorios")
-    ev_df = pd.DataFrame([dict(evento=k, **v) for k, v in ev.items()])
-    ph = phase_table(ev)
-    seq_series = {lab: _load_series(out, spec) for lab, spec in (ecfg.get("sequence") or {}).get("series", {}).items()}
-    seq_series = {k: v for k, v in seq_series.items() if v is not None}
-    win = (ev["inicio"]["t"], ev["impacto"]["t"] + float((ecfg.get("sequence") or {}).get("margin_s", 0.05)))
-    peaks = peak_times(seq_series, win)
-    sm = sequence_metrics(peaks, list((ecfg.get("sequence") or {}).get("order", [])))
-    table_dir = out / "reports/tables/events"
-    table_dir.mkdir(parents=True, exist_ok=True)
-    ev_df.to_csv(table_dir / "eventos.csv", index=False)
-    ph.to_csv(table_dir / "fases.csv", index=False)
-    pd.DataFrame([dict(serie=k, **v) for k, v in peaks.items()]).to_csv(table_dir / "picos_secuencia.csv", index=False)
-    pd.DataFrame([dict(par=f"{a}→{b}", lag_ms=l) for a, b, l in
-                  zip(sm["labels"][:-1], sm["labels"][1:], sm["lags_ms"])]
-                 ).assign(tau=sm["tau"], nota=sm["nota"]).to_csv(table_dir / "secuencia.csv", index=False)
-    return dict(events=ev_df, phases=ph, peaks=peaks, sequence=sm, warnings=warns)
+# ---------------------------------------------------------------- ejecución
+def run(config=DEFAULT_CONFIG, stages=STAGES, force_pose: bool = False, root=None) -> Context:
+    cfg = load_config(config)
+    ctx = Context(cfg, Paths.from_config(cfg, root))
+    if "pose" in stages:
+        from .video.extract import extract_all
+        extract_all(cfg, ctx.paths, force=force_pose)
+    if "kinematics" in stages:
+        stage_kinematics(ctx)
+    if "serves" in stages:
+        stage_serves(ctx)
+    if "analysis" in stages:
+        stage_analysis(ctx)
+    # Advertencias persistentes: una corrida parcial conserva las de etapas que no se repitieron.
+    warn_path = ctx.paths.tables / "advertencias.csv"
+    if "kinematics" not in stages and warn_path.exists():
+        previous = pd.read_csv(warn_path)["advertencia"].dropna().tolist()
+        ctx.warnings = list(dict.fromkeys(previous + ctx.warnings))
+    if ctx.warnings or "kinematics" in stages:
+        ctx.table(pd.DataFrame({"advertencia": list(dict.fromkeys(ctx.warnings))}), "advertencias")
+    if "report" in stages:
+        from .reporting.report import write_report
+        from .reporting.viz import make_figures
+        figs = make_figures(ctx)
+        write_report(ctx, figs)
+    return ctx

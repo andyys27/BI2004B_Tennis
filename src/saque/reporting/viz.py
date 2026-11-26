@@ -1,307 +1,248 @@
-"""M13: generación de figuras diagnósticas y cinemáticas."""
+"""Figuras del reporte (PNG estáticos con matplotlib).
+
+Color: los saques son ordinales -> rampa azul de un solo tono (claro = primer saque, oscuro = último),
+para que la progresión de la serie (fatiga) se lea sin leyenda; la leyenda se incluye igual.
+Fuentes de marcadores (categórico): paleta fija en orden.
+"""
 from __future__ import annotations
 
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
+import matplotlib.pyplot as plt  # noqa: E402
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
+
+SERIES = ["#257de0", "#f47230", "#00b894", "#f2a600", "#ee7fac", "#008a17", "#6a4ce2", "#ec4647"]
+ORDINAL_BLUE = ["#84b9f3", "#519ced", "#257de0", "#1b64be", "#0f4a96", "#0e3d7e"]
+TEXT, TEXT2, GRID = "#191919", "#666666", "#e6e6e6"
+
+plt.rcParams.update({
+    "axes.edgecolor": TEXT2, "axes.labelcolor": TEXT, "xtick.color": TEXT2, "ytick.color": TEXT2,
+    "axes.spines.top": False, "axes.spines.right": False, "axes.grid": True, "grid.color": GRID,
+    "grid.linewidth": 0.8, "lines.linewidth": 2, "font.size": 9, "axes.titlesize": 10,
+    "axes.titleweight": "bold", "legend.frameon": False,
+})
 
 
-def _save(fig, path: Path):
+def serve_colors(n: int) -> list[str]:
+    idx = np.linspace(0, len(ORDINAL_BLUE) - 1, max(n, 1)).round().astype(int)
+    return [ORDINAL_BLUE[i] for i in idx]
+
+
+def _save(fig, path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fig.tight_layout()
-    fig.savefig(path, dpi=160, bbox_inches="tight")
+    fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
+    return path
 
 
-def plot_time_coverage(catalog: pd.DataFrame, path: Path):
-    required = {"archivo", "t_ini", "t_fin"}
-    if not required.issubset(catalog.columns) or catalog.empty:
-        return False
-    data = catalog.dropna(subset=["t_ini", "t_fin"]).reset_index(drop=True)
-    if data.empty:
-        return False
-    fig, ax = plt.subplots(figsize=(10, max(3, 0.32 * len(data))))
-    for i, row in data.iterrows():
-        ax.plot([row.t_ini, row.t_fin], [i, i], lw=5, solid_capstyle="butt")
-    ax.set_yticks(range(len(data)), data["archivo"])
-    ax.set_xlabel("Tiempo (s)")
-    ax.set_title("Cobertura temporal de los archivos")
-    ax.grid(axis="x", alpha=0.25)
-    _save(fig, path)
-    return True
+def plot_serve_detection(kin_by_view: dict[str, pd.DataFrame], serves: pd.DataFrame,
+                         wrist: str, path: Path) -> Path:
+    """Altura de la muñeca de golpeo en todo el video con los impactos detectados."""
+    fig, axes = plt.subplots(len(kin_by_view), 1, figsize=(10, 2.4 * len(kin_by_view)),
+                             squeeze=False)
+    for ax, (view, kin) in zip(axes[:, 0], kin_by_view.items()):
+        ax.plot(kin["time_s"], kin[f"y_{wrist}"], color=SERIES[0], lw=1.2)
+        for _, s in serves[serves["vista"] == view].iterrows():
+            ax.axvspan(s["t_ini"], s["t_fin"], color=SERIES[0], alpha=0.08, lw=0)
+            ax.axvline(s["t_impacto"], color=TEXT, lw=0.8, ls="--")
+            ax.annotate(f"S{int(s['saque'])}", (s["t_impacto"], 1), xycoords=("data", "axes fraction"),
+                        ha="center", va="bottom", color=TEXT, fontsize=8)
+        ax.set_ylabel("altura muñeca (m)")
+        ax.set_title(f"Vista {view}: saques detectados", loc="left")
+    axes[-1, 0].set_xlabel("tiempo del video (s)")
+    fig.tight_layout()
+    return _save(fig, path)
 
 
-def plot_sampling_intervals(files: list[Path], path: Path):
-    deltas = []
-    for file in files:
-        data = pd.read_csv(file)
-        if "time_s" not in data:
+def plot_marker_sources(sources: pd.DataFrame, path: Path) -> Path:
+    """Fracción de fotogramas por fuente de cada marcador (estampita / MediaPipe / hueco)."""
+    views = list(sources["vista"].unique())
+    fig, axes = plt.subplots(1, len(views), figsize=(5 * len(views), 5), squeeze=False)
+    labels = [("frac_estampita", "estampita"), ("frac_pose", "MediaPipe"), ("frac_hueco", "hueco")]
+    for ax, view in zip(axes[0], views):
+        d = sources[sources["vista"] == view].iloc[::-1]
+        left = np.zeros(len(d))
+        for (col, lab), color in zip(labels, [SERIES[0], SERIES[2], "#bdbdbd"]):
+            ax.barh(d["marcador"], d[col], left=left, color=color, label=lab, height=0.7,
+                    edgecolor="white", linewidth=1)
+            left += d[col].to_numpy()
+        ax.set_xlim(0, 1)
+        ax.set_xlabel("fracción de fotogramas")
+        ax.set_title(f"Vista {view}", loc="left")
+        ax.grid(axis="y", visible=False)
+    axes[0, 0].legend(loc="upper center", bbox_to_anchor=(0.5, -0.1), ncol=3)
+    fig.suptitle("Origen de cada marcador", x=0.02, ha="left", fontweight="bold")
+    fig.tight_layout()
+    return _save(fig, path)
+
+
+def plot_normalized_curves(curves: pd.DataFrame, units: dict, path: Path) -> Path:
+    """Curvas inicio->impacto (0-100 %) de cada saque, en small multiples por variable."""
+    variables = list(curves["variable"].unique())
+    ncol = 3
+    nrow = int(np.ceil(len(variables) / ncol))
+    fig, axes = plt.subplots(nrow, ncol, figsize=(4 * ncol, 2.8 * nrow), squeeze=False)
+    trials = sorted(curves["trial"].unique(), key=lambda s: int(s.split("_")[-1]))
+    colors = dict(zip(trials, serve_colors(len(trials))))
+    for ax, var in zip(axes.flat, variables):
+        g = curves[curves["variable"] == var]
+        for tr in trials:
+            d = g[g["trial"] == tr]
+            ax.plot(d["percent"], d["value"], color=colors[tr], label=tr.replace("saque_", "S"))
+        ax.set_title(var.replace("_", " "), loc="left")
+        ax.set_ylabel(units.get(var, ""))
+        ax.set_xlabel("% inicio → impacto")
+    for ax in list(axes.flat)[len(variables):]:
+        ax.set_visible(False)
+    axes.flat[0].legend(title="saque", ncol=len(trials), loc="lower left", fontsize=7)
+    fig.tight_layout()
+    return _save(fig, path)
+
+
+def plot_fatigue(values: pd.DataFrame, trends: pd.DataFrame, path: Path) -> Path:
+    """Valor por saque de cada indicador con su recta de tendencia."""
+    variables = list(values["variable"].unique())
+    ncol = 3
+    nrow = int(np.ceil(len(variables) / ncol))
+    fig, axes = plt.subplots(nrow, ncol, figsize=(4 * ncol, 2.6 * nrow), squeeze=False)
+    tr = trends.set_index("variable")
+    for ax, var in zip(axes.flat, variables):
+        g = values[values["variable"] == var].dropna(subset=["valor"]).sort_values("saque")
+        x, y = g["saque"].to_numpy(float), g["valor"].to_numpy(float)
+        ax.plot(x, y, color=SERIES[0], marker="o", ms=6, lw=1.2,
+                markeredgecolor="white", markeredgewidth=1.5)
+        title = var.replace("_", " ")
+        if var in tr.index and "confianza" in tr and isinstance(tr.loc[var, "confianza"], str):
+            title += f"  [confianza {tr.loc[var, 'confianza']}]"
+        if var in tr.index and "pendiente_por_saque" in tr and np.isfinite(tr.loc[var, "pendiente_por_saque"]):
+            b = tr.loc[var, "pendiente_por_saque"]
+            a = y.mean() - b * x.mean()
+            ax.plot(x, a + b * x, color=TEXT2, lw=1, ls="--")
+            title += f"\nρ={tr.loc[var, 'rho_spearman']:+.2f}  Δ1→n={tr.loc[var, 'cambio_primero_ultimo_pct']:+.1f} %"
+        ax.set_title(title, loc="left", fontsize=9)
+        ax.set_xticks(x)
+        ax.set_xlabel("saque")
+        ax.set_ylabel(g["unidad"].iloc[0] if len(g) else "")
+    for ax in list(axes.flat)[len(variables):]:
+        ax.set_visible(False)
+    fig.suptitle("Indicadores por saque (posible fatiga; exploratorio, n = 5)", x=0.02,
+                 ha="left", fontweight="bold")
+    fig.tight_layout()
+    return _save(fig, path)
+
+
+def plot_jacobian(jac_by_serve: dict[int, pd.DataFrame], path: Path) -> Path:
+    """Rapidez de muñeca directa vs Jacobiano, un panel por saque."""
+    n = len(jac_by_serve)
+    fig, axes = plt.subplots(1, n, figsize=(3.2 * n, 3), sharey=True, squeeze=False)
+    for ax, (s, d) in zip(axes[0], sorted(jac_by_serve.items())):
+        ax.plot(d["time_s"] - d["time_s"].iloc[0], d["speed_directa"], color=SERIES[0], label="directa")
+        ax.plot(d["time_s"] - d["time_s"].iloc[0], d["speed_J"], color=SERIES[1], lw=1.2,
+                ls="--", label="J(θ)ω")
+        ax.set_title(f"Saque {s}", loc="left")
+        ax.set_xlabel("t (s)")
+    axes[0, 0].set_ylabel("rapidez muñeca (m/s)")
+    axes[0, 0].legend(loc="upper left")
+    fig.tight_layout()
+    return _save(fig, path)
+
+
+def plot_inverse_dynamics(id_by_serve: dict[int, pd.DataFrame], joints: dict[str, str],
+                          title: str, path: Path) -> Path:
+    """Momento articular neto por articulación; un color por saque (rampa ordinal)."""
+    fig, axes = plt.subplots(len(joints), 1, figsize=(8, 2.4 * len(joints)), sharex=True,
+                             squeeze=False)
+    colors = serve_colors(len(id_by_serve))
+    for ax, (j, lab) in zip(axes[:, 0], joints.items()):
+        for c, (s, d) in zip(colors, sorted(id_by_serve.items())):
+            t = d["time_s"] - d["time_s"].iloc[-1]
+            ax.plot(t, d[f"T_{j}_Nm"], color=c, lw=1.4, label=f"S{s}")
+        ax.axhline(0, color=TEXT2, lw=0.8)
+        ax.set_ylabel(f"{lab} (N·m)")
+    axes[0, 0].legend(ncol=len(id_by_serve), loc="upper left", fontsize=7)
+    axes[-1, 0].set_xlabel("tiempo relativo al final de la ventana (s)")
+    fig.suptitle(title, x=0.02, ha="left", fontweight="bold")
+    fig.tight_layout()
+    return _save(fig, path)
+
+
+SKELETON = [("hombro", "codo"), ("codo", "muneca"), ("hombro", "cadera"), ("cadera", "rodilla"),
+            ("rodilla", "tobillo"), ("tobillo", "punta")]
+
+
+def plot_impact_montage(frames: list[tuple[int, np.ndarray, pd.Series]], view: str,
+                        path: Path) -> Path:
+    """Fotograma de impacto de cada saque con el esqueleto y los marcadores usados."""
+    n = len(frames)
+    fig, axes = plt.subplots(1, n, figsize=(2.6 * n, 4.8), squeeze=False)
+    for ax, (s, img, row) in zip(axes[0], frames):
+        ax.imshow(img)
+        for side in ("izq", "der"):
+            for a, b in SKELETON:
+                pa, pb = f"{a}_{side}", f"{b}_{side}"
+                if f"x_{pa}" in row and f"x_{pb}" in row:
+                    ax.plot([row[f"x_{pa}"], row[f"x_{pb}"]], [row[f"y_{pa}"], row[f"y_{pb}"]],
+                            color="white", lw=1.5)
+        for c in [c for c in row.index if c.startswith("src_")]:
+            m = c[4:]
+            if pd.notna(row.get(f"x_{m}")):
+                color = SERIES[1] if row[c] == "estampita" else SERIES[0]
+                ax.plot(row[f"x_{m}"], row[f"y_{m}"], "o", ms=4, color=color,
+                        markeredgecolor="white", markeredgewidth=0.8)
+        ax.set_title(f"Saque {s}", loc="left")
+        ax.axis("off")
+    fig.suptitle(f"Vista {view}: impacto (naranja = estampita, azul = MediaPipe)", x=0.02,
+                 ha="left", fontweight="bold")
+    fig.tight_layout()
+    return _save(fig, path)
+
+
+def make_figures(ctx) -> list[Path]:
+    """Genera todas las figuras posibles a partir de las tablas y datos procesados."""
+    from ..video.reader import frame_times, probe, read_frame
+
+    tables, fig_dir = ctx.paths.tables, ctx.paths.figures
+    figs: list[Path] = []
+    serves = pd.read_csv(tables / "saques.csv")
+    kin = {v: pd.read_parquet(ctx.view_dir(v) / "kinematics.parquet") for v in ctx.cfg["views"]}
+    figs.append(plot_serve_detection(kin, serves, ctx.wrist, fig_dir / "deteccion_saques.png"))
+    figs.append(plot_marker_sources(pd.read_csv(tables / "fuente_marcadores.csv"),
+                                    fig_dir / "fuente_marcadores.png"))
+    units = {k: v.get("unit", "") for k, v in ctx.cfg["fatigue"]["variables"].items()}
+    if (tables / "curvas_normalizadas.csv").exists():
+        figs.append(plot_normalized_curves(pd.read_csv(tables / "curvas_normalizadas.csv"), units,
+                                           fig_dir / "curvas_por_saque.png"))
+    figs.append(plot_fatigue(pd.read_csv(tables / "fatiga_valores_por_saque.csv"),
+                             pd.read_csv(tables / "fatiga_tendencias.csv"),
+                             fig_dir / "fatiga_tendencias.png"))
+    for view in ctx.cfg["views"]:
+        vd = ctx.view_dir(view)
+        jac = {int(p.parent.name.split("_")[1]): pd.read_csv(p) for p in sorted(vd.glob("saque_*/jacobian.csv"))}
+        if jac:
+            figs.append(plot_jacobian(jac, fig_dir / f"jacobiano_{view}.png"))
+        for name, joints in (("tren_superior", {"shoulder": "hombro", "elbow": "codo"}),
+                             ("tren_inferior", {"hip": "cadera", "knee": "rodilla", "ankle": "tobillo"})):
+            idd = {int(p.parent.name.split("_")[1]): pd.read_csv(p)
+                   for p in sorted(vd.glob(f"saque_*/dinamica_inversa_{name}.csv"))}
+            if idd:
+                figs.append(plot_inverse_dynamics(
+                    idd, joints, f"Vista {view}: momentos netos, {name.replace('_', ' ')} (exploratorio)",
+                    fig_dir / f"dinamica_inversa_{name}_{view}.png"))
+        video = ctx.paths.video(view, ctx.cfg)
+        if not video.is_file():
             continue
-        t = data["time_s"].to_numpy(float)
-        dt = np.diff(t)
-        deltas.extend(dt[np.isfinite(dt) & (dt > 0)])
-    if not deltas:
-        return False
-    fig, ax = plt.subplots(figsize=(7, 4))
-    ax.hist(np.asarray(deltas) * 1000, bins="auto", color="#4472C4", alpha=0.85)
-    ax.set_xlabel("Intervalo entre muestras (ms)")
-    ax.set_ylabel("Frecuencia")
-    ax.set_title("Distribución del intervalo de muestreo")
-    ax.grid(axis="y", alpha=0.25)
-    _save(fig, path)
-    return True
-
-
-def plot_kinematics(data: pd.DataFrame, path: Path, title: str):
-    columns = {
-        key: [c for c in data.columns if c.startswith(prefix)]
-        for key, prefix in (("Posición angular", "theta_"),
-                            ("Velocidad angular", "omega_"),
-                            ("Aceleración angular", "alpha_"))
-    }
-    if not any(columns.values()) or "time_s" not in data:
-        return False
-    fig, axes = plt.subplots(3, 1, sharex=True, figsize=(9, 8))
-    units = ("rad", "rad/s", "rad/s²")
-    for ax, (label, cols), unit in zip(axes, columns.items(), units):
-        for col in cols:
-            ax.plot(data["time_s"], data[col], label=col.removeprefix(
-                "theta_").removeprefix("omega_").removeprefix("alpha_"))
-        ax.set_ylabel(unit)
-        ax.grid(alpha=0.2)
-        if cols:
-            ax.legend(loc="best", fontsize="small")
-        else:
-            ax.text(0.5, 0.5, f"Sin series de {label.lower()}", ha="center", va="center",
-                    transform=ax.transAxes)
-    axes[-1].set_xlabel("Tiempo (s)")
-    fig.suptitle(title)
-    _save(fig, path)
-    return True
-
-
-def plot_phases(phases: pd.DataFrame, events: pd.DataFrame, path: Path):
-    if phases.empty:
-        return False
-    fig, ax = plt.subplots(figsize=(9, 2.8))
-    for i, row in phases.iterrows():
-        ax.barh(i, row["t_fin"] - row["t_ini"], left=row["t_ini"], height=0.55,
-                label=row["fase"])
-        ax.text((row["t_ini"] + row["t_fin"]) / 2, i, row["fase"],
-                ha="center", va="center", fontsize=8)
-    if not events.empty:
-        for _, row in events.iterrows():
-            ax.axvline(row["t"], color="black", linestyle="--", linewidth=0.7)
-    ax.set_yticks([])
-    ax.set_xlabel("Tiempo (s)")
-    ax.set_title("Fases y eventos detectados (reloj de referencia M7)")
-    ax.grid(axis="x", alpha=0.2)
-    _save(fig, path)
-    return True
-
-
-def plot_jacobian(data: pd.DataFrame, path: Path):
-    needed = {"time_s", "speed_J", "speed_directa"}
-    if not needed.issubset(data.columns):
-        return False
-    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
-    axes[0].plot(data["time_s"], data["speed_directa"], label="Directa")
-    axes[0].plot(data["time_s"], data["speed_J"], label="Jacobiano", alpha=0.8)
-    axes[0].set_xlabel("Tiempo (s)")
-    axes[0].set_ylabel("Rapidez (m/s)")
-    axes[0].legend()
-    axes[0].grid(alpha=0.2)
-    axes[1].scatter(data["speed_directa"], data["speed_J"], s=8, alpha=0.6)
-    lim = float(np.nanmax(data[["speed_directa", "speed_J"]].to_numpy()))
-    axes[1].plot([0, lim], [0, lim], "k--", lw=1)
-    axes[1].set_xlabel("Rapidez directa (m/s)")
-    axes[1].set_ylabel("Rapidez Jacobiano (m/s)")
-    axes[1].grid(alpha=0.2)
-    fig.suptitle("Validación de velocidad de muñeca")
-    _save(fig, path)
-    return True
-
-
-def plot_contributions(data: pd.DataFrame, path: Path):
-    needed = {"time_s", "frac_hombro", "frac_codo"}
-    if not needed.issubset(data.columns):
-        return False
-    fig, ax = plt.subplots(figsize=(8, 4))
-    ax.plot(data["time_s"], data["frac_hombro"], label="Hombro")
-    ax.plot(data["time_s"], data["frac_codo"], label="Codo")
-    ax.axhline(0, color="black", linewidth=0.6)
-    ax.set_xlabel("Tiempo (s)")
-    ax.set_ylabel("Fracción proyectada")
-    ax.set_title("Contribuciones articulares a la rapidez de muñeca")
-    ax.legend()
-    ax.grid(alpha=0.2)
-    _save(fig, path)
-    return True
-
-
-def plot_wrist_trajectory(filtered: pd.DataFrame, kin: pd.DataFrame, path: Path,
-                          flip_y: bool = True):
-    if not {"x_muneca", "y_muneca"}.issubset(filtered.columns):
-        return False
-    x = filtered["x_muneca"].to_numpy(float)
-    y = filtered["y_muneca"].to_numpy(float) * (-1 if flip_y else 1)
-    speed = kin["speed_muneca"].to_numpy(float)
-    fig, ax = plt.subplots(figsize=(6, 6))
-    points = ax.scatter(x, y, c=speed, s=12, cmap="viridis")
-    ax.plot(x, y, color="gray", alpha=0.4, linewidth=0.7)
-    ax.set_aspect("equal", adjustable="datalim")
-    ax.set_xlabel("x (m)")
-    ax.set_ylabel("y (m)")
-    ax.set_title("Trayectoria de muñeca coloreada por rapidez")
-    fig.colorbar(points, ax=ax, label="Rapidez (m/s)")
-    _save(fig, path)
-    return True
-
-
-def _inverse_dynamics_note(data: pd.DataFrame) -> str:
-    notes = []
-    for column in ("tracked_side", "external_force_mode"):
-        if column in data:
-            values = data[column].dropna().unique()
-            if len(values) == 1:
-                notes.append(str(values[0]))
-            elif len(values) > 1:
-                notes.append(f"{column} variable")
-    if "tracking_valid" in data:
-        valid = data["tracking_valid"].astype(bool)
-        invalid_count = int((~valid).sum())
-        if invalid_count:
-            notes.append(f"{invalid_count} muestras enmascaradas por QC")
-    return "; ".join(notes)
-
-
-def _plot_inverse_dynamics(data: pd.DataFrame, path: Path, quantity: str) -> bool:
-    if "T_ankle_Nm" in data:
-        joints = {"ankle": "Tobillo", "knee": "Rodilla", "hip": "Cadera"}
-    elif "T_shoulder_Nm" in data:
-        joints = {"shoulder": "Hombro", "elbow": "Codo"}
-    elif "T_hip_Nm" in data:
-        joints = {"hip": "Cadera", "knee": "Rodilla"}
-    else:
-        return False
-    if "time_s" not in data:
-        return False
-    columns = ([f"T_{joint}_Nm" for joint in joints]
-               if quantity == "moments"
-               else [f"{axis}_{joint}_N" for joint in joints for axis in ("Fx", "Fz")])
-    if not set(columns).issubset(data.columns):
-        return False
-    time_s = data["time_s"].to_numpy(float)
-    if not np.isfinite(time_s).all() or np.any(np.diff(time_s) <= 0):
-        raise ValueError("M13: el tiempo de dinámica inversa debe ser finito y creciente")
-    if np.isinf(data[columns].to_numpy(float)).any():
-        raise ValueError("M13: las fuerzas/torques de dinámica inversa contienen infinitos")
-
-    fig, axes = plt.subplots(len(joints), 1, sharex=True,
-                             figsize=(9, 3.2 * len(joints)), squeeze=False)
-    axes = axes[:, 0]
-    for ax, (joint, label) in zip(axes, joints.items()):
-        if quantity == "moments":
-            ax.plot(time_s, data[f"T_{joint}_Nm"], color="#C00000", label="Momento neto")
-            ax.axhline(0, color="black", linewidth=0.7)
-            ax.set_ylabel("N·m")
-        else:
-            ax.plot(time_s, data[f"Fx_{joint}_N"], label="Fx")
-            ax.plot(time_s, data[f"Fz_{joint}_N"], label="Fz")
-            ax.axhline(0, color="black", linewidth=0.7)
-            ax.set_ylabel("N")
-            ax.legend(loc="best")
-        ax.set_title(label, loc="left", fontsize="medium")
-        ax.grid(alpha=0.25)
-    axes[-1].set_xlabel("Tiempo (s)")
-    title = ("Momentos articulares netos" if quantity == "moments"
-             else "Fuerzas de reacción articulares")
-    note = _inverse_dynamics_note(data)
-    if note:
-        title += f"\nSupuesto: {note}"
-    fig.suptitle(title)
-    _save(fig, path)
-    return True
-
-
-def plot_inverse_dynamics_moments(data: pd.DataFrame, path: Path) -> bool:
-    """Grafica momentos articulares netos del tobillo, rodilla y cadera."""
-    return _plot_inverse_dynamics(data, path, "moments")
-
-
-def plot_inverse_dynamics_forces(data: pd.DataFrame, path: Path) -> bool:
-    """Grafica componentes de las fuerzas de reacción articulares."""
-    return _plot_inverse_dynamics(data, path, "forces")
-
-
-def run_visualizations(out_dir=".", config=None) -> dict:
-    """Genera las figuras posibles con los datos actuales e informa las faltantes."""
-    out = Path(out_dir)
-    figures = out / "reports/figures"
-    generated, warnings = [], []
-    catalog_path = out / "reports/tables/catalog/catalogo.csv"
-    if catalog_path.exists() and plot_time_coverage(pd.read_csv(catalog_path),
-                                                   figures / "time_coverage.png"):
-        generated.append(figures / "time_coverage.png")
-    else:
-        warnings.append("M13 omitió cobertura temporal: catálogo ausente o sin rangos temporales.")
-
-    sync_files = sorted((out / "data/interim/synchronized").glob("*.csv"))
-    if plot_sampling_intervals(sync_files, figures / "sampling_intervals.png"):
-        generated.append(figures / "sampling_intervals.png")
-    else:
-        warnings.append("M13 omitió histograma de muestreo: no hay series sincronizadas.")
-
-    kin_dir = out / "data/processed/kinematics"
-    for file in sorted(kin_dir.glob("*_kinematics.csv")):
-        dest = figures / "kinematics" / f"{file.stem.removesuffix('_kinematics')}.png"
-        if plot_kinematics(pd.read_csv(file), dest, file.stem):
-            generated.append(dest)
-
-    phase_path = out / "reports/tables/events/fases.csv"
-    event_path = out / "reports/tables/events/eventos.csv"
-    if phase_path.exists():
-        phases = pd.read_csv(phase_path)
-        events = pd.read_csv(event_path) if event_path.exists() else pd.DataFrame()
-        dest = figures / "events/phases.png"
-        if plot_phases(phases, events, dest):
-            generated.append(dest)
-
-    jac_dir = out / "data/processed/jacobian"
-    for file in sorted(jac_dir.glob("*_jacobian.csv")):
-        data = pd.read_csv(file)
-        for plotter, suffix in ((plot_jacobian, "validation"), (plot_contributions, "contributions")):
-            dest = figures / "jacobian" / f"{file.stem}_{suffix}.png"
-            if plotter(data, dest):
-                generated.append(dest)
-
-    arm_filtered = out / "data/processed/filtered/posterior_brazo_filtered.csv"
-    arm_kin = kin_dir / "posterior_brazo_kinematics.csv"
-    if arm_filtered.exists() and arm_kin.exists():
-        flip_y = bool((config or {}).get("flip_y", True))
-        dest = figures / "trajectory/wrist.png"
-        if plot_wrist_trajectory(pd.read_csv(arm_filtered), pd.read_csv(arm_kin), dest, flip_y):
-            generated.append(dest)
-
-    inverse_dir = out / "data/processed/inverse_dynamics"
-    for file in sorted(inverse_dir.glob("*_inverse_dynamics.csv")):
-        data = pd.read_csv(file)
-        plots = (
-            (plot_inverse_dynamics_moments, "joint_moments"),
-            (plot_inverse_dynamics_forces, "joint_reaction_forces"),
-        )
-        for plotter, suffix in plots:
-            dest = figures / "inverse_dynamics" / f"{file.stem}_{suffix}.png"
-            if plotter(data, dest):
-                generated.append(dest)
-            else:
-                warnings.append(
-                    f"M13 omitió la gráfica {suffix}: faltan columnas en {file}."
-                )
-    if not list(kin_dir.glob("*_kinematics.csv")):
-        warnings.append("M13 no encontró salidas cinemáticas para graficar.")
-    return {"figures": generated, "warnings": warnings}
+        px = pd.read_parquet(vd / "markers_px.parquet")
+        info = probe(video)
+        times = frame_times(info)
+        frames = []
+        for _, s in serves[serves["vista"] == view].iterrows():
+            row = px.iloc[int(np.argmin(np.abs(px["time_s"] - s["t_impacto"])))]
+            if pd.notna(row["frame"]):
+                frames.append((int(s["saque"]), read_frame(info, int(row["frame"]), times), row))
+        if frames:
+            figs.append(plot_impact_montage(frames, view, fig_dir / f"impactos_{view}.png"))
+    return figs

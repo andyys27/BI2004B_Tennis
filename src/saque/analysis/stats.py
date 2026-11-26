@@ -1,13 +1,10 @@
-"""M10: descriptivos, curvas normalizadas y asociaciones exploratorias."""
+"""Descriptivos por fase, curvas normalizadas, variabilidad entre saques y asociaciones."""
 from __future__ import annotations
-
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr
 
-from .config import load_config
 
 
 def describe_series(time_s, values, *, variable: str, trial: str, phase: str,
@@ -121,79 +118,3 @@ def bootstrap_spearman(x, y, *, n_boot: int = 5000, alpha: float = 0.05,
     return {"n": n, "rho": rho, "ic_inferior": float(low), "ic_superior": float(high),
             "muestras_bootstrap": len(samples),
             "nota": "exploratorio; IC bootstrap inestable con muestras pequeñas"}
-
-
-def run_statistics(out_dir=".", config="config/pipeline.yaml") -> dict:
-    """Genera tablas M10 a partir de series configuradas y fases M7 disponibles."""
-    cfg, out = load_config(config), Path(out_dir)
-    specs = (cfg.get("statistics") or {}).get("series") or {}
-    kin_dir = out / "data/processed/kinematics"
-    phase_path = out / "reports/tables/events/fases.csv"
-    if phase_path.exists():
-        phases = pd.read_csv(phase_path)
-    else:
-        phases = pd.DataFrame()
-    if not specs:
-        return {"descriptives": pd.DataFrame(), "warnings": ["M10 sin series configuradas"]}
-
-    desc_rows, curve_frames, warnings = [], [], []
-    for label, spec in specs.items():
-        source = kin_dir / f"{spec['group']}_kinematics.csv"
-        if not source.exists():
-            warnings.append(f"M10 omitió {label}: no existe {source}")
-            continue
-        data = pd.read_csv(source)
-        column = spec["column"]
-        if column not in data:
-            raise ValueError(f"M10: falta la columna {column!r} en {source}")
-        t, y = data["time_s"].to_numpy(float), data[column].to_numpy(float)
-        label_phases = phases if not phases.empty else pd.DataFrame(
-            [{"fase": "registro_completo", "t_ini": float(t[0]), "t_fin": float(t[-1])}])
-        for phase in label_phases.to_dict(orient="records"):
-            start_s = max(float(phase["t_ini"]), float(t[0]))
-            end_s = min(float(phase["t_fin"]), float(t[-1]))
-            try:
-                if end_s <= start_s:
-                    raise ValueError("fase fuera del intervalo temporal de la serie")
-                row = describe_series(t, y, variable=label, trial="intento_disponible",
-                                      phase=phase["fase"], start_s=start_s, end_s=end_s)
-            except ValueError as exc:
-                warnings.append(f"M10 omitió {label}/{phase['fase']}: {exc}")
-                continue
-            row["grupo"] = spec["group"]
-            row["n_intentos_disponibles"] = 1
-            row["nota"] = "Una exportación por serie: no estima variabilidad entre intentos."
-            desc_rows.append(row)
-            finite = np.isfinite(y)
-            grid = np.linspace(start_s, end_s, 101)
-            if grid[0] < t[finite][0] or grid[-1] > t[finite][-1]:
-                warnings.append(f"M10 omitió curva normalizada {label}/{phase['fase']}: "
-                                "faltan muestras válidas en los extremos.")
-                continue
-            curve = pd.DataFrame({"trial": "intento_disponible",
-                                  "percent": np.linspace(0.0, 100.0, 101),
-                                  "value": np.interp(grid, t[finite], y[finite])})
-            curve.insert(0, "variable", label)
-            curve.insert(1, "fase", phase["fase"])
-            curve_frames.append(curve)
-    descriptives = pd.DataFrame(desc_rows)
-    curves = pd.concat(curve_frames, ignore_index=True) if curve_frames else pd.DataFrame(
-        columns=["variable", "fase", "trial", "percent", "value"])
-    variability = []
-    for (variable, phase), group in curves.groupby(["variable", "fase"]):
-        band, attempts = intertrial_variability(group[["trial", "percent", "value"]])
-        variability.append({"variable": variable, "fase": phase, "n_intentos": int(group["trial"].nunique()),
-                            "rmsd_max": float(attempts["rmsd_vs_media"].max()) if not attempts.empty else np.nan,
-                            "nota": "variabilidad inter-intento no estimable con un solo intento"})
-    variability_df = pd.DataFrame(variability)
-    table_dir = out / "reports/tables/statistics"
-    table_dir.mkdir(parents=True, exist_ok=True)
-    descriptives.to_csv(table_dir / "descriptivos_por_fase.csv", index=False)
-    curves.to_csv(table_dir / "curvas_normalizadas.csv", index=False)
-    variability_df.to_csv(table_dir / "variabilidad_interintento.csv", index=False)
-    if descriptives.empty or descriptives["trial"].nunique() < 2:
-        warnings.append("M10: hay menos de dos intentos identificados; no se interpreta variabilidad inter-intento ni asociaciones.")
-    if not (cfg.get("events") or {}).get("shared_clock_verified", False):
-        warnings.append("M10: el reloj común entre series no está verificado; métricas por fase entre grupos son exploratorias.")
-    return {"descriptives": descriptives, "curves": curves,
-            "variability": variability_df, "warnings": warnings}

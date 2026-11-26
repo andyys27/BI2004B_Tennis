@@ -1,9 +1,11 @@
-"""[M3] Control de calidad del tracking. Todo dato modificado queda en un log."""
+"""Control de calidad del tracking: saltos aislados y huecos. Todo cambio queda en un log."""
 from __future__ import annotations
 import math
 import numpy as np
 import pandas as pd
 from scipy.ndimage import median_filter
+
+from .filtering import interpolate_short_gaps
 
 
 class QCLog:
@@ -26,41 +28,6 @@ def robust_z(x: np.ndarray) -> np.ndarray:
     med = np.nanmedian(x)
     mad = np.nanmedian(np.abs(x - med)) + 1e-12
     return 0.6745 * (x - med) / mad
-
-
-def clean_time(df: pd.DataFrame, name: str, log: QCLog, policy: str = "first") -> pd.DataFrame:
-    """Garantiza tiempo estrictamente creciente. Resuelve duplicados según `policy`."""
-    df = df.copy()
-    bad = df["time_s"].isna()
-    for i in np.where(bad)[0]:
-        log.add(name, "tiempo_nan", "fila_descartada", int(i))
-    df = df.loc[~bad].reset_index(drop=True)
-
-    t = df["time_s"].to_numpy()
-    dup = np.r_[False, np.diff(t) == 0]
-    if dup.any():
-        for i in np.where(dup)[0]:
-            log.add(name, "tiempo_duplicado", f"politica_{policy}", int(i), f"t={t[i]:.3f}")
-        if policy == "mean":
-            df = df.groupby("time_s", sort=False, as_index=False).mean(numeric_only=True)
-        elif policy == "last":
-            df = df.drop_duplicates("time_s", keep="last").reset_index(drop=True)
-        else:
-            df = df.drop_duplicates("time_s", keep="first").reset_index(drop=True)
-
-    t = df["time_s"].to_numpy()
-    prev_max = np.maximum.accumulate(np.r_[-np.inf, t[:-1]])
-    nonmono = ~(t > prev_max)
-    for i in np.where(nonmono)[0]:
-        log.add(name, "tiempo_no_creciente", "fila_descartada", int(i), f"t={t[i]:.3f}")
-    return df.loc[~nonmono].reset_index(drop=True)
-
-
-def time_report(df: pd.DataFrame) -> dict:
-    dt = np.diff(df["time_s"].to_numpy())
-    return dict(n=len(df), t0=float(df["time_s"].iloc[0]), t1=float(df["time_s"].iloc[-1]),
-                dt_mean=float(dt.mean()), dt_min=float(dt.min()), dt_max=float(dt.max()),
-                fs_eff=float(1 / dt.mean()))
 
 
 def markers_in(df: pd.DataFrame) -> list[str]:
@@ -112,12 +79,12 @@ def fill_short_gaps(df: pd.DataFrame, name: str, log: QCLog, max_gap_s: float = 
     df = df.copy()
     dt = float(np.median(np.diff(df["time_s"])))
     limit = max(1, math.ceil(max_gap_s / dt))
-    cols = [c for c in df.columns if c.startswith(("x_", "y_")) or "angulo" in c]
+    cols = [c for c in df.columns if c.startswith(("x_", "y_"))]
     for c in cols:
         n_nan = int(df[c].isna().sum())
         if n_nan == 0:
             continue
-        df[c] = df[c].interpolate(method="linear", limit=limit, limit_area="inside")
+        df[c] = interpolate_short_gaps(df[c].to_numpy(float), limit)
         left = int(df[c].isna().sum())
         log.add(name, "huecos", f"{c}: {n_nan - left} interpoladas, {left} sin resolver")
     return df

@@ -1,134 +1,153 @@
-resample_hz: 120
-flip_y: true               # Kinovea: y hacia abajo. Poner false si calibraste y hacia arriba.
+# Configuración del pipeline de análisis del saque kick (video -> MediaPipe -> cinemática).
+# Las rutas son relativas a la raíz del proyecto.
+
+subject:
+  height_m: 1.64
+  body_mass_kg: 58.0
+  foot_length_m: 0.25
+  hitting_side: der            # der | izq
+
+paths:
+  raw_video: data/raw/video
+  pose: data/interim/pose
+  processed: data/processed
+  reports: reports
+
+pose:
+  model: heavy                 # lite | full | heavy (se descarga a models/ si no existe)
+  model_dir: models
+  min_detection_confidence: 0.5
+  min_tracking_confidence: 0.5
+  min_visibility: 0.5          # landmarks con menor visibilidad se tratan como hueco
+
+# Parámetros comunes de detección de estampitas (cada vista puede sobrescribirlos).
+stickers:
+  hsv_low: [22, 110, 70]
+  hsv_high: [48, 255, 255]
+  search_radius_px: 90
+  min_area_px: 25
+  max_area_px: 1500
+  min_circularity: 0.35
+  max_offset_mad: 4.0          # descarta detecciones cuyo desfase al landmark es atípico
+
+views:
+  lateral:
+    video: lateral.mp4
+    # Vara de 1 m: extremo superior e inferior en píxeles (imagen ya rotada, 1080x1920).
+    # Medido en el fotograma 150; verificar con `saque calibrate lateral`.
+    # ground_plane: lleva la escala de la vara al plano de la jugadora con la altura de cámara
+    # (la vara y la jugadora no están a la misma distancia de la cámara). pole = escala de la vara.
+    calibration: {method: ground_plane, p_top: [990, 1174], p_bottom: [980, 1745], length_m: 1.0,
+                  camera_height_m: 1.30}
+    # Landmarks con estampita visible y fiable en esta vista (lado de golpeo).
+    # De perfil las dos caderas se superponen: la estampita visible se asigna a la del lado de golpeo.
+    stickers: [hombro_der, codo_der, muneca_der, cadera_der, rodilla_der, tobillo_der, punta_der]
+    segments:
+      tronco: [cadera_der, hombro_der]
+      brazo: [hombro_der, codo_der]
+      antebrazo: [codo_der, muneca_der]
+      muslo: [cadera_der, rodilla_der]
+      pierna: [rodilla_der, tobillo_der]
+      pie: [tobillo_der, punta_der]
+    joints:
+      hombro: [cadera_der, hombro_der, codo_der]      # elevación brazo-tronco
+      codo: [hombro_der, codo_der, muneca_der]
+      cadera: [hombro_der, cadera_der, rodilla_der]
+      rodilla: [cadera_der, rodilla_der, tobillo_der]
+      tobillo: [rodilla_der, tobillo_der, punta_der]
+    linear: [hombro_der, codo_der, muneca_der, cadera_der, rodilla_der, tobillo_der]
+    jacobian: {upper: brazo, fore: antebrazo, shoulder: hombro_der, elbow: codo_der,
+               wrist: muneca_der}
+    ball: {roi_y_max_px: 1100, max_start_y_px: 450}
+  posterior:
+    video: posterior.mp4
+    # La vara (línea de fondo) está más lejos de la cámara que la jugadora: sin corrección de
+    # profundidad la estatura aparente sale ~2.3 m. ground_plane la corrige.
+    calibration: {method: ground_plane, p_top: [500, 872], p_bottom: [520, 1318], length_m: 1.0,
+                  camera_height_m: 1.30}
+    stickers: [cadera_izq, rodilla_izq, tobillo_izq, tobillo_der]
+    segments:
+      linea_hombros: [hombro_izq, hombro_der]
+      linea_caderas: [cadera_izq, cadera_der]
+      tronco: [cadera_der, hombro_der]
+      brazo: [hombro_der, codo_der]
+      antebrazo: [codo_der, muneca_der]
+    joints:
+      codo: [hombro_der, codo_der, muneca_der]
+      rodilla_izq: [cadera_izq, rodilla_izq, tobillo_izq]
+      rodilla: [cadera_der, rodilla_der, tobillo_der]          # lado de golpeo (eventos)
+    linear: [muneca_der, cadera_izq, cadera_der]
+
+serves:
+  expected: 5
+  reference_view: lateral      # vista donde se fecha el impacto (la pelota se ve contra el cielo)
+  impact_method: ball          # ball = fin de la caída de la pelota | wrist = máx. rapidez de muñeca
+  min_separation_s: 3.0
+  pre_impact_s: 1.6            # ventana de cada saque alrededor del impacto
+  post_impact_s: 0.8
+  manual_impacts_s: {}         # ej. {lateral: [5.1, 13.4, ...]} para corregir la detección
+
 filter:
-  type: butterworth        # butterworth | savgol
+  type: butterworth            # butterworth | savgol
   order: 2
-  cutoff_hz: null          # null = análisis de residuos (Winter) por marcador
+  cutoff_hz: null              # null = análisis de residuos de Winter por marcador
   cutoff_range_hz: [4, 20]
   fallback_cutoff_hz: 10.0
+
 qc:
-  duplicate_time_policy: first   # first | last | mean
+  segment_length_tol: 0.6      # |L/L_mediana - 1| mayor -> hueco (error grosero; el escorzo 2D es gradual)
+  segment_jump_tol: 0.30       # salto entre fotogramas > 30 % de la mediana -> hueco (el brazo a ~30 rad/s cambia hasta ~25 % por escorzo)
+  max_marker_speed_m_s: 15.0   # desplazamiento entre fotogramas más rápido -> hueco
+  max_omega_rad_s: 60.0        # ~3400 °/s en el plano; por encima = error de marcador o escorzo
   jump_z: 8.0
   jump_min_rel: 0.02
   max_gap_s: 0.05
 
-# La cinemática lineal lateral no trae sufijo _cm: confirmar unidad real antes de usar velocidades lineales.
-coord_unit_overrides:
-  lateral/cinematica_lineal_lateral.csv: cm
-
-groups:
-  lateral_pierna:
-    files: [lateral/cinematica_lineal_lateral.csv]
-    segments: {muslo: [cadera, rodilla], pierna: [rodilla, tobillo]}
-    joints: {rodilla: [cadera, rodilla, tobillo]}
-    linear: [cadera, rodilla, tobillo]
-    angle_cols: []
-  lateral_rodilla:
-    files: [lateral/cinematica_angular_lateral_rodilla.csv, lateral/PI1_tiempo_angulo_abs_rodilla.csv]
-    angle_cols: auto
-  lateral_tobillo:
-    files: [lateral/cinematica_angular_lateral_tobillo.csv, lateral/PI1_tiempo_angulo_abs_tobillo.csv]
-    angle_cols: auto
-  posterior_brazo:
-    files: [posterior/cinematica_lineal_brazo_pos.csv]
-    segments: {brazo: [hombro, codo], antebrazo: [codo, muneca]}
-    joints: {codo: [hombro, codo, muneca]}
-    linear: [hombro, codo, muneca]
-    jacobian: {upper: brazo, fore: antebrazo, shoulder: hombro, elbow: codo, wrist: muneca}
-    angle_cols: []
-  posterior_pierna:
-    files: [posterior/cinematica_posterior_PD.xlsx.csv]
-    segments: {muslo: [cadera, rodilla], pierna: [rodilla, tobillo], pie: [tobillo, punta]}
-    joints: {rodilla: [cadera, rodilla, tobillo], tobillo: [rodilla, tobillo, punta]}
-    linear: [punta, tobillo, rodilla, cadera]
-    angle_cols: []
-  posterior_angulos:
-    files: [posterior/cinematica_angular_rodilla.csv, posterior/cinematica_angular_tobillo.csv,
-            posterior/cinematica_angular_brazo.csv]
-    angle_cols: auto
-
-# NOTA: cinematica_lineal_brazo_v_a.csv no se usa: sus v/a se recalculan desde posiciones.
-# NOTA: posterior/cinematica_angular_rodilla.csv (fuera de data/) es duplicado y lo excluye M1 por hash.
-
-# ---- M7: eventos y secuencia ----
 events:
-  shared_clock_verified: false      # pasar a true SOLO tras sincronizar brazo y pierna con un evento común
-  manual: {}                        # ej: {impacto: 1.532}  (fotograma de contacto marcado en el video)
-  series:
-    wrist_speed: {group: posterior_brazo,  column: speed_muneca}
-    elbow_angle: {group: posterior_brazo,  column: theta_interior_codo}
-    elbow_omega: {group: posterior_brazo,  column: omega_interior_codo}
-    knee_angle:  {group: posterior_pierna, column: theta_interior_rodilla}
+  start_frac: 0.05
+  end_frac: 0.20
+  sequence_margin_s: 0.05
+  # Cadena próximo-distal (vista lateral): series cuyo pico se ordena en el tiempo.
   sequence:
-    margin_s: 0.05
-    order: [muslo, brazo, codo, muneca]       # cadena disponible hoy: faltan tronco y hombro
-    series:
-      muslo:  {group: posterior_pierna, column: omega_seg_muslo}
-      brazo:  {group: posterior_brazo,  column: omega_seg_brazo}
-      codo:   {group: posterior_brazo,  column: omega_interior_codo}
-      muneca: {group: posterior_brazo,  column: speed_muneca}
+    muslo: omega_seg_muslo
+    tronco: omega_seg_tronco
+    brazo: omega_seg_brazo
+    codo: omega_interior_codo
+    muneca: speed_muneca_der
 
-# ---- M10: estadísticas descriptivas y consistencia ----
-statistics:
-  series:
-    flexion_rodilla: {group: posterior_pierna, column: theta_interior_rodilla}
-    omega_muslo: {group: posterior_pierna, column: omega_seg_muslo}
-    omega_codo: {group: posterior_brazo, column: omega_interior_codo}
-    rapidez_muneca: {group: posterior_brazo, column: speed_muneca}
+# Indicadores por saque que se siguen a lo largo de la serie (posible fatiga).
+fatigue:
+  view: lateral
+  min_valid_frac: 0.8          # picos con <80 % de muestras válidas en los 200 ms pre-impacto se excluyen
+  # confidence: alta | media | baja. Los picos de ω del brazo dependen del QC (oclusiones y
+  # escorzo 2D cerca del impacto): se reportan, pero no deben sostener conclusiones solos.
+  # Las duraciones de fase (carga, aceleración, seguimiento) se agregan automáticamente.
+  variables:
+    rapidez_pico_muneca: {column: speed_muneca_der, stat: max, unit: m/s, confidence: media}
+    omega_pico_codo: {column: omega_interior_codo, stat: absmax, unit: rad/s, confidence: baja}
+    omega_pico_tronco: {column: omega_seg_tronco, stat: absmax, unit: rad/s, confidence: baja}
+    omega_pico_hombro: {column: omega_interior_hombro, stat: absmax, unit: rad/s, confidence: baja}
+    flexion_max_rodilla: {column: theta_interior_rodilla, stat: min, unit: rad, confidence: alta}
+    elevacion_max_hombro: {column: theta_interior_hombro, stat: max, unit: rad, confidence: media}
+    altura_max_muneca: {column: y_muneca_der, stat: max, unit: m, confidence: alta}
 
-# ---- M12: estimación sin GRF; asumir fase aérea en todo el registro ----
 inverse_dynamics:
   enabled: true
-  force_mode: assume_flight_no_grf # No usar estos resultados para la fase de apoyo.
-  shared_clock_verified: false
-  file: grf/grf.csv
-  kinematics_group: posterior_pierna
-  tracked_side: derecha (marcador PD; vista posterior)
-  segment_columns: {foot: pie, shank: pierna, thigh: muslo}
-  contact_threshold_n: 20.0
-  columns:
-    time: time_s
-    force_x: GRF_x
-    force_z: vGRF
-    cop_x: cop_x_from_ankle_m
-    cop_z: cop_z_from_ankle_m
+  view: lateral
+  # Supuestos exploratorios: sin GRF (fase aérea) y muñeca sin carga externa.
   anthropometry:
-    height_m: 1.64
-    body_mass_kg: 58.0
-    foot_length_m: 0.25
-
-# M12 exploratorio PI1 (izquierda): cadena cadera-rodilla-tobillo, sin pie/GRF.
-left_lower_limb_inverse_dynamics:
-  enabled: true
-  force_mode: assume_zero_ankle_force
-  kinematics_group: lateral_pierna
-  output_name: lateral_PI1_left
-  tracked_side: izquierda (PI1; vista lateral)
-  markers: {hip: cadera, knee: rodilla, ankle: tobillo}
-  cv_warn: 0.05
-  length_outlier_mad_threshold: 5.0
-  derivative_margin_samples: 6
-  anthropometry:
-    body_mass_kg: 58.0
     thigh_mass_fraction: 0.10
     shank_mass_fraction: 0.0465
-    thigh_com_fraction: 0.433
-    shank_com_fraction: 0.433
-    thigh_gyration_fraction: 0.323
-    shank_gyration_fraction: 0.302
-
-# M12 superior exploratorio: el extremo distal muñeca se trata como libre.
-upper_limb_inverse_dynamics:
-  enabled: true
-  force_mode: assume_zero_wrist_force
-  kinematics_group: posterior_brazo
-  markers: {shoulder: hombro, elbow: codo, wrist: muneca}
-  cv_warn: 0.05
-  anthropometry:
-    body_mass_kg: 58.0
+    foot_mass_fraction: 0.0145
     upper_arm_mass_fraction: 0.0271
     forearm_mass_fraction: 0.0162
+    thigh_com_fraction: 0.433
+    shank_com_fraction: 0.433
+    foot_com_fraction: 0.50
     upper_arm_com_fraction: 0.436
     forearm_com_fraction: 0.430
+    thigh_gyration_fraction: 0.323
+    shank_gyration_fraction: 0.302
+    foot_gyration_fraction: 0.475
     upper_arm_gyration_fraction: 0.322
     forearm_gyration_fraction: 0.303

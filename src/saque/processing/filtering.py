@@ -1,4 +1,4 @@
-"""[M5] Suavizado y derivación sobre malla uniforme."""
+"""Suavizado y derivación sobre malla uniforme."""
 from __future__ import annotations
 import numpy as np
 from scipy.signal import butter, filtfilt, savgol_filter
@@ -65,3 +65,59 @@ def derivative(x, fs: float, order: int = 1) -> np.ndarray:
     for _ in range(order):
         d = np.gradient(d, 1 / fs, edge_order=2)
     return d
+
+
+def finite_runs(x) -> list[tuple[int, int]]:
+    """Intervalos [ini, fin) de muestras finitas consecutivas."""
+    ok = np.isfinite(np.asarray(x, float)).astype(int)
+    edges = np.diff(np.r_[0, ok, 0])
+    return list(zip(np.where(edges == 1)[0], np.where(edges == -1)[0]))
+
+
+def butter_lp_gaps(x, fs: float, fc: float, order: int = 2, min_len: int = 12) -> np.ndarray:
+    """Butterworth por tramos finitos: los huecos largos se conservan como NaN.
+
+    Tramos más cortos que `min_len` muestras quedan NaN (no se pueden filtrar de forma fiable).
+    """
+    x = np.asarray(x, float)
+    out = np.full_like(x, np.nan)
+    for a, b in finite_runs(x):
+        if b - a >= min_len:
+            out[a:b] = butter_lp(x[a:b], fs, fc, order)
+    return out
+
+
+def longest_run(x) -> np.ndarray:
+    """Segmento finito más largo (para elegir la frecuencia de corte de Winter)."""
+    runs = finite_runs(x)
+    if not runs:
+        return np.array([])
+    a, b = max(runs, key=lambda r: r[1] - r[0])
+    return np.asarray(x, float)[a:b]
+
+
+def short_gap_mask(x, max_gap: int) -> np.ndarray:
+    """True en las muestras NaN que pertenecen a huecos internos de <= max_gap muestras."""
+    nan = ~np.isfinite(np.asarray(x, float))
+    edges = np.diff(np.r_[0, nan.astype(int), 0])
+    out = np.zeros(nan.size, bool)
+    for a, b in zip(np.where(edges == 1)[0], np.where(edges == -1)[0]):
+        if a > 0 and b < nan.size and b - a <= max_gap:
+            out[a:b] = True
+    return out
+
+
+def interpolate_short_gaps(x, max_gap: int) -> np.ndarray:
+    """Interpola linealmente SOLO los huecos internos completos de <= max_gap muestras.
+
+    (pandas `interpolate(limit=n)` rellenaría también las primeras n muestras de huecos largos.)
+    """
+    x = np.asarray(x, float)
+    fill = short_gap_mask(x, max_gap)
+    if not fill.any():
+        return x.copy()
+    ok = np.isfinite(x)
+    out = x.copy()
+    idx = np.arange(x.size)
+    out[fill] = np.interp(idx[fill], idx[ok], x[ok])
+    return out

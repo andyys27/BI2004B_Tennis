@@ -1,8 +1,7 @@
-"""[M7] Eventos, fases y secuencia próximo-distal.
+"""Eventos, fases y secuencia próximo-distal de un saque.
 
-El impacto se toma como PROXY (máximo de rapidez de muñeca) porque no se digitaliza raqueta ni pelota.
-Si marcaste el fotograma de contacto en el video, pásalo en `manual={"impacto": t_s}`.
-Todas las series deben compartir un reloj verificado (M4); si no, los eventos son exploratorios.
+El impacto se toma como PROXY (máximo de rapidez de muñeca) porque no se rastrea raqueta ni pelota.
+Si se marcó el fotograma de contacto en el video, pasarlo en `manual={"impacto": t_s}`.
 """
 from __future__ import annotations
 import numpy as np
@@ -33,6 +32,10 @@ def detect_events(series: dict[str, Series], manual: dict | None = None, start_f
     """
     manual = manual or {}
     t, v = (np.asarray(a, float) for a in series["wrist_speed"])
+    if not np.isfinite(v).any():
+        raise ValueError("wrist_speed no tiene muestras válidas")
+    # Huecos (oclusión, QC) interpolados solo para los umbrales: un NaN nunca cumple "v < umbral".
+    v = pd.Series(v).interpolate(limit_direction="both").to_numpy()
     pk = int(np.argmax(v))
     ev, warn = {}, []
 

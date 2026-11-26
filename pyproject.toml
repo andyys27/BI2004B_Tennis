@@ -1,9 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "saque"
-version = "0.1.0"
-description = "Pipeline cinemático 2D del saque kick (M1-M6)"
+version = "0.2.0"
+description = "Análisis cinemático 2D del saque kick a partir de video (MediaPipe + estampitas)"
 requires-python = ">=3.10"
-dependencies = ["numpy", "pandas", "scipy", "matplotlib", "pyyaml", "pytest"]
+dependencies = [
+    "numpy",
+    "pandas",
+    "pyarrow",
+    "scipy",
+    "matplotlib",
+    "pyyaml",
+    # 1.x se cierra al cargar el modelo (probado en Python 3.11 y 3.14); 0.10.30+ trae rueda py3.
+    "mediapipe>=0.10.30,<1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+saque = "saque.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -1,13 +1,18 @@
-"""M12: dinámica inversa planar de pie, pierna y muslo con Newton-Euler."""
+"""Dinámica inversa planar (Newton-Euler 2D) exploratoria por saque.
+
+Supuestos explícitos (no hay plataforma de fuerza ni medición de raqueta):
+- tren inferior (pie-pierna-muslo): GRF = 0 en todo el saque (fase aérea asumida); durante el
+  apoyo los momentos NO representan las cargas reales;
+- tren superior (brazo-antebrazo): fuerza externa nula en muñeca; mano, raqueta y pelota excluidas.
+Longitudes de segmento: mediana de la distancia entre marcadores del saque; masas, centros de
+masa y radios de giro: fracciones de Winter configuradas en `inverse_dynamics.anthropometry`.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
-
 import numpy as np
 import pandas as pd
 
-from .config import load_config
 from .jacobian import segment_lengths
 
 
@@ -46,40 +51,6 @@ class UpperLimb:
     def __post_init__(self):
         if self.gravity_m_s2 <= 0:
             raise ValueError("gravity_m_s2 debe ser positivo")
-
-
-def winter_parameters(height_m: float, body_mass_kg: float, foot_length_m: float) -> LowerLimb:
-    """Construye parámetros iniciales basados en las proporciones documentadas de Winter.
-
-    Son estimaciones de referencia y deben verificarse para cada participante.
-    """
-    if height_m <= 0 or body_mass_kg <= 0 or foot_length_m <= 0:
-        raise ValueError("estatura, masa y longitud del pie deben ser positivas")
-
-    def segment(length, mass_fraction, com_fraction, gyration_fraction):
-        mass = body_mass_kg * mass_fraction
-        inertia = mass * (length * gyration_fraction) ** 2
-        return Segment(length, mass, length * com_fraction, inertia)
-
-    return LowerLimb(
-        foot=segment(foot_length_m, 0.0145, 0.50, 0.475),
-        shank=segment(0.246 * height_m, 0.0465, 0.433, 0.302),
-        thigh=segment(0.245 * height_m, 0.10, 0.433, 0.323),
-    )
-
-
-def upper_limb_parameters(body_mass_kg: float, upper_arm_length_m: float,
-                          forearm_length_m: float, anthropometry: dict) -> UpperLimb:
-    """Genera parámetros segmentarios iniciales; antropometría individual no validada."""
-    if body_mass_kg <= 0 or upper_arm_length_m <= 0 or forearm_length_m <= 0:
-        raise ValueError("masa corporal y longitudes de brazo deben ser positivas")
-
-    return UpperLimb(
-        upper_arm=_segment_from_anthropometry(
-            upper_arm_length_m, body_mass_kg, "upper_arm", anthropometry),
-        forearm=_segment_from_anthropometry(
-            forearm_length_m, body_mass_kg, "forearm", anthropometry),
-    )
 
 
 def _segment_from_anthropometry(length_m: float, body_mass_kg: float,
@@ -296,336 +267,72 @@ def inverse_dynamics_upper_limb_2d(
     return result
 
 
-def _write_status(out: Path, status: str, message: str, warnings: list[str]) -> dict:
-    table_dir = out / "reports/tables/inverse_dynamics"
-    table_dir.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame([{"status": status, "message": message}]).to_csv(
-        table_dir / "status.csv", index=False)
-    return {"status": status, "message": message, "warnings": warnings}
+def _xy_accel(kin: pd.DataFrame, marker: str) -> np.ndarray:
+    return np.column_stack([kin[f"ax_{marker}"], kin[f"ay_{marker}"]]).astype(float)
 
 
-def run_upper_limb_inverse_dynamics(out_dir=".", config="config/pipeline.yaml") -> dict:
-    """Corre dinámica inversa 2D de brazo con la hipótesis exploratoria de muñeca libre."""
-    cfg, out = load_config(config), Path(out_dir)
-    spec = cfg.get("upper_limb_inverse_dynamics") or {}
-    status_path = out / "reports/tables/inverse_dynamics/upper_limb_status.csv"
-    status_path.parent.mkdir(parents=True, exist_ok=True)
-    status, message, warnings = "disabled", "M12 superior está desactivado.", []
-
-    if spec.get("enabled"):
-        force_mode = spec.get("force_mode")
-        if force_mode != "assume_zero_wrist_force":
-            raise ValueError(
-                "M12 superior requiere force_mode='assume_zero_wrist_force'; "
-                "no se dispone de fuerzas medidas en muñeca."
-            )
-        group = spec["kinematics_group"]
-        kin_path = out / "data/processed/kinematics" / f"{group}_kinematics.csv"
-        filtered_path = out / "data/processed/filtered" / f"{group}_filtered.csv"
-        missing_paths = [str(path) for path in (kin_path, filtered_path) if not path.is_file()]
-        if missing_paths:
-            status, message = "not_run", f"M12 superior requiere archivos: {missing_paths}"
-        else:
-            kin, filtered = pd.read_csv(kin_path), pd.read_csv(filtered_path)
-            markers = spec.get("markers", {})
-            shoulder = markers.get("shoulder", "hombro")
-            elbow = markers.get("elbow", "codo")
-            wrist = markers.get("wrist", "muneca")
-            lengths_upper = segment_lengths(filtered, shoulder, elbow)
-            lengths_fore = segment_lengths(filtered, elbow, wrist)
-            if not np.isfinite([lengths_upper["L"], lengths_fore["L"]]).all():
-                raise ValueError("M12 superior: no se pudieron estimar longitudes de segmento finitas")
-            kin_time = kin["time_s"].to_numpy(float)
-            filtered_time = filtered["time_s"].to_numpy(float)
-            if (len(kin_time) != len(filtered_time)
-                    or not np.allclose(kin_time, filtered_time, rtol=0, atol=1e-9)):
-                raise ValueError("M12 superior: cinemática y coordenadas filtradas no comparten la malla temporal")
-
-            anthropometry = spec["anthropometry"]
-            params = upper_limb_parameters(
-                float(anthropometry["body_mass_kg"]), lengths_upper["L"], lengths_fore["L"],
-                anthropometry,
-            )
-            angles = {
-                "upper_arm": kin["theta_seg_brazo"].to_numpy(float),
-                "forearm": kin["theta_seg_antebrazo"].to_numpy(float),
-            }
-            omega = {
-                "upper_arm": kin["omega_seg_brazo"].to_numpy(float),
-                "forearm": kin["omega_seg_antebrazo"].to_numpy(float),
-            }
-            alpha = {
-                "upper_arm": kin["alpha_seg_brazo"].to_numpy(float),
-                "forearm": kin["alpha_seg_antebrazo"].to_numpy(float),
-            }
-            result = inverse_dynamics_upper_limb_2d(
-                kin_time, angles, omega, alpha,
-                np.column_stack([kin[f"ax_{shoulder}"], kin[f"ay_{shoulder}"]]),
-                np.column_stack([kin[f"ax_{elbow}"], kin[f"ay_{elbow}"]]),
-                params,
-            )
-            result_path = out / "data/processed/inverse_dynamics" / f"{group}_inverse_dynamics.csv"
-            result_path.parent.mkdir(parents=True, exist_ok=True)
-            result.to_csv(result_path, index=False)
-            status = "completed_assumed_zero_wrist_force"
-            message = (
-                f"Procesadas {len(result)} muestras; fuerza externa en muñeca=0. "
-                "Se excluyen mano, raqueta y pelota; resultado exploratorio."
-            )
-            warnings.append(
-                "M12 superior supone fuerza externa nula en muñeca y excluye mano/raqueta/"
-                "pelota; no representa las cargas reales del saque."
-            )
-            if max(lengths_upper["cv"], lengths_fore["cv"]) > float(spec.get("cv_warn", 0.05)):
-                warnings.append(
-                    "M12 superior: CV alto en longitudes hombro-codo/codo-muñeca; "
-                    "revisar tracking o movimiento fuera del plano."
-                )
-
-    pd.DataFrame([{"status": status, "message": message}]).to_csv(status_path, index=False)
-    if status != "completed_assumed_zero_wrist_force" and status != "disabled":
-        warnings.append(message)
-    return {"status": status, "message": message, "warnings": warnings}
+def _seg_series(kin: pd.DataFrame, seg: str, kind: str) -> np.ndarray:
+    return kin[f"{kind}_seg_{seg}"].to_numpy(float)
 
 
-def run_left_lower_limb_inverse_dynamics(out_dir=".", config="config/pipeline.yaml") -> dict:
-    """Calcula cadera/rodilla de PI1 con el tobillo libre; el pie y la GRF se excluyen."""
-    cfg, out = load_config(config), Path(out_dir)
-    spec = cfg.get("left_lower_limb_inverse_dynamics") or {}
-    status_path = out / "reports/tables/inverse_dynamics/left_limb_status.csv"
-    status_path.parent.mkdir(parents=True, exist_ok=True)
-    status, message, warnings = "disabled", "M12 de pierna izquierda está desactivado.", []
-
-    if spec.get("enabled"):
-        if spec.get("force_mode") != "assume_zero_ankle_force":
-            raise ValueError(
-                "M12 izquierda requiere force_mode='assume_zero_ankle_force'; "
-                "no se dispone de fuerza externa medida en tobillo."
-            )
-        group = spec["kinematics_group"]
-        kin_path = out / "data/processed/kinematics" / f"{group}_kinematics.csv"
-        filtered_path = out / "data/processed/filtered" / f"{group}_filtered.csv"
-        missing_paths = [str(path) for path in (kin_path, filtered_path) if not path.is_file()]
-        if missing_paths:
-            status, message = "not_run", f"M12 izquierda requiere archivos: {missing_paths}"
-        else:
-            kin, filtered = pd.read_csv(kin_path), pd.read_csv(filtered_path)
-            markers = spec.get("markers", {})
-            hip = markers.get("hip", "cadera")
-            knee = markers.get("knee", "rodilla")
-            ankle = markers.get("ankle", "tobillo")
-            thigh_lengths = segment_lengths(filtered, hip, knee)
-            shank_lengths = segment_lengths(filtered, knee, ankle)
-            if not np.isfinite([thigh_lengths["L"], shank_lengths["L"]]).all():
-                raise ValueError("M12 izquierda: longitudes de segmentos no finitas")
-            kin_time = kin["time_s"].to_numpy(float)
-            filtered_time = filtered["time_s"].to_numpy(float)
-            if (len(kin_time) != len(filtered_time)
-                    or not np.allclose(kin_time, filtered_time, rtol=0, atol=1e-9)):
-                raise ValueError("M12 izquierda: cinemática y coordenadas no comparten la malla temporal")
-
-            anthropometry = spec["anthropometry"]
-            body_mass = float(anthropometry["body_mass_kg"])
-            thigh = _segment_from_anthropometry(
-                thigh_lengths["L"], body_mass, "thigh", anthropometry)
-            shank = _segment_from_anthropometry(
-                shank_lengths["L"], body_mass, "shank", anthropometry)
-            angles = {
-                "proximal": kin["theta_seg_muslo"].to_numpy(float),
-                "distal": kin["theta_seg_pierna"].to_numpy(float),
-            }
-            omega = {
-                "proximal": kin["omega_seg_muslo"].to_numpy(float),
-                "distal": kin["omega_seg_pierna"].to_numpy(float),
-            }
-            alpha = {
-                "proximal": kin["alpha_seg_muslo"].to_numpy(float),
-                "distal": kin["alpha_seg_pierna"].to_numpy(float),
-            }
-            result = inverse_dynamics_two_segment_2d(
-                kin_time, angles, omega, alpha,
-                np.column_stack([kin[f"ax_{hip}"], kin[f"ay_{hip}"]]),
-                np.column_stack([kin[f"ax_{knee}"], kin[f"ay_{knee}"]]),
-                thigh, shank, float(spec.get("gravity_m_s2", 9.81)),
-            ).rename(columns={
-                "Fx_middle_N": "Fx_knee_N", "Fz_middle_N": "Fz_knee_N",
-                "T_middle_Nm": "T_knee_Nm", "Fx_proximal_N": "Fx_hip_N",
-                "Fz_proximal_N": "Fz_hip_N", "T_proximal_Nm": "T_hip_Nm",
-                "distal_external_force_assumed_N": "ankle_external_force_assumed_N",
-                "proximal_segment_length_m": "thigh_length_m",
-                "distal_segment_length_m": "shank_length_m",
-                "proximal_segment_mass_kg": "thigh_mass_kg",
-                "distal_segment_mass_kg": "shank_mass_kg",
-            })
-            invalid_tracking = _rigid_segment_length_outliers(
-                filtered,
-                [(hip, knee), (knee, ankle)],
-                float(spec.get("length_outlier_mad_threshold", 5.0)),
-                int(spec.get("derivative_margin_samples", 2)),
-            )
-            result["tracking_valid"] = ~invalid_tracking
-            result["tracking_qc_reason"] = np.where(
-                invalid_tracking, "longitud_segmentaria_atipica_o_margen_derivada", "")
-            force_moment_columns = [
-                "Fx_knee_N", "Fz_knee_N", "T_knee_Nm",
-                "Fx_hip_N", "Fz_hip_N", "T_hip_Nm",
-            ]
-            result.loc[invalid_tracking, force_moment_columns] = np.nan
-            result["tracked_side"] = str(
-                spec.get("tracked_side", "izquierda (PI1; vista lateral)"))
-            result["external_force_mode"] = (
-                "Fuerza externa en tobillo=0; pie/GRF excluidos")
-            output_name = spec.get("output_name", "lateral_PI1_left")
-            result_path = out / "data/processed/inverse_dynamics" / f"{output_name}_inverse_dynamics.csv"
-            result_path.parent.mkdir(parents=True, exist_ok=True)
-            result.to_csv(result_path, index=False)
-            status = "completed_assumed_zero_ankle_force"
-            message = (
-                f"Procesadas {len(result)} muestras para PI1; fuerza externa en tobillo=0. "
-                f"Se excluyen pie y GRF; {int(invalid_tracking.sum())} muestras se enmascararon "
-                "por QC de longitud; resultado exploratorio."
-            )
-            warnings.append(
-                "M12 izquierda supone fuerza externa nula en tobillo y excluye pie/GRF; "
-                "no representa las cargas reales de apoyo."
-            )
-            cv_warn = float(spec.get("cv_warn", 0.05))
-            if max(thigh_lengths["cv"], shank_lengths["cv"]) > cv_warn:
-                warnings.append(
-                    "M12 izquierda: CV alto en longitudes cadera-rodilla/rodilla-tobillo "
-                    f"({thigh_lengths['cv']:.1%}, {shank_lengths['cv']:.1%}); "
-                    "revisar tracking o movimiento fuera del plano."
-                )
-            if invalid_tracking.any():
-                warnings.append(
-                    f"M12 izquierda: se enmascararon {int(invalid_tracking.sum())} muestras "
-                    "con longitudes segmentarias atípicas y su margen de derivación."
-                )
-
-    pd.DataFrame([{"status": status, "message": message}]).to_csv(status_path, index=False)
-    if status != "completed_assumed_zero_ankle_force" and status != "disabled":
-        warnings.append(message)
-    return {"status": status, "message": message, "warnings": warnings}
+def _valid_rows(kin: pd.DataFrame, cols: list[str]) -> np.ndarray:
+    return np.isfinite(kin[cols].to_numpy(float)).all(axis=1)
 
 
-def run_inverse_dynamics(out_dir=".", config="config/pipeline.yaml", raw_dir="data/raw") -> dict:
-    """Corre M12 con GRF medida o bajo la hipótesis explícita de fase aérea."""
-    cfg, out = load_config(config), Path(out_dir)
-    spec = cfg.get("inverse_dynamics") or {}
-    warnings = []
-    status = "disabled"
-    message = "M12 está desactivado; no se calcularon fuerzas ni torques."
-    if spec.get("enabled"):
-        force_mode = spec.get("force_mode", "measured_grf")
-        if force_mode not in ("measured_grf", "assume_flight_no_grf"):
-            raise ValueError(f"M12: force_mode no reconocido: {force_mode!r}")
-        kin_group = spec["kinematics_group"]
-        kin_path = out / "data/processed/kinematics" / f"{kin_group}_kinematics.csv"
-        if not kin_path.is_file():
-            status, message = "not_run", f"M12 requiere cinemática procesada: {kin_path}"
-            warnings.append(message)
-            return _write_status(out, status, message, warnings)
-        kin = pd.read_csv(kin_path)
-        anthropometry = spec["anthropometry"]
-        params = winter_parameters(float(anthropometry["height_m"]),
-                                   float(anthropometry["body_mass_kg"]),
-                                   float(anthropometry["foot_length_m"]))
-        segment_columns = spec.get("segment_columns") or {}
-        segment_columns = {
-            key: segment_columns.get(key, key)
-            for key in ("foot", "shank", "thigh")
-        }
-        missing_kinematics = [
-            f"{prefix}_{segment_columns[segment]}"
-            for segment in segment_columns
-            for prefix in ("theta_seg", "omega_seg", "alpha_seg")
-            if f"{prefix}_{segment_columns[segment]}" not in kin
-        ]
-        if missing_kinematics:
-            raise ValueError(f"M12: faltan columnas de cinemática en {kin_path}: {missing_kinematics}")
-        required_linear = ("time_s", "ax_tobillo", "ay_tobillo")
-        missing_linear = [column for column in required_linear if column not in kin]
-        if missing_linear:
-            raise ValueError(f"M12: faltan columnas de aceleración en {kin_path}: {missing_linear}")
+def run_serve_inverse_dynamics(kin: pd.DataFrame, markers: pd.DataFrame, view_cfg: dict,
+                               body_mass_kg: float, anthropometry: dict,
+                               gravity_m_s2: float = 9.81) -> dict[str, pd.DataFrame]:
+    """Calcula tren superior y tren inferior para un saque. Omite lo que no tenga marcadores.
 
-        tk = kin["time_s"].to_numpy(float)
-        common = np.ones(len(kin), dtype=bool)
-        if force_mode == "measured_grf" and not spec.get("shared_clock_verified", False):
-            status, message = "not_run", "Se requiere verificar la sincronización entre GRF y video."
-        else:
-            if force_mode == "measured_grf":
-                grf_path = Path(spec.get("file", ""))
-                if not grf_path.is_absolute():
-                    grf_path = Path(raw_dir) / grf_path
-            else:
-                grf_path = None
+    `kin` y `markers` (filtrados, en m) deben compartir la malla temporal.
+    """
+    seg = view_cfg.get("segments", {})
+    out: dict[str, pd.DataFrame] = {}
 
-            if force_mode == "measured_grf" and not grf_path.is_file():
-                status, message = "not_run", f"No existe el archivo GRF configurado: {grf_path}"
-            else:
-                if force_mode == "measured_grf":
-                    columns = spec["columns"]
-                    grf = pd.read_csv(grf_path)
-                    needed = [columns[k] for k in ("time", "force_x", "force_z", "cop_x", "cop_z")]
-                    missing = [c for c in needed if c not in grf]
-                    if missing:
-                        raise ValueError(f"M12: faltan columnas GRF configuradas en {grf_path}: {missing}")
-                    tg = grf[columns["time"]].to_numpy(float)
-                    if not np.isfinite(tg).all() or np.any(np.diff(tg) <= 0):
-                        raise ValueError("M12: el tiempo de GRF debe ser finito y estrictamente creciente")
-                    common = (tk >= tg[0]) & (tk <= tg[-1])
-                    if common.sum() < 3:
-                        raise ValueError("M12: GRF y cinemática no tienen al menos tres muestras en común")
-                    tk = tk[common]
+    def segment(name, prox, dist):
+        L = segment_lengths(markers, prox, dist)["L"]
+        return _segment_from_anthropometry(L, body_mass_kg, name, anthropometry)
 
-                    def interp(name):
-                        values = grf[columns[name]].to_numpy(float)
-                        if not np.isfinite(values).all():
-                            raise ValueError(f"M12: la columna GRF {columns[name]!r} contiene valores no finitos")
-                        return np.interp(tk, tg, values)
+    # Tren superior: hombro-codo-muñeca, muñeca libre.
+    if {"brazo", "antebrazo"} <= set(seg):
+        sh, el = seg["brazo"]
+        _, wr = seg["antebrazo"]
+        cols = [f"{k}_seg_{s}" for s in ("brazo", "antebrazo") for k in ("theta", "omega", "alpha")]
+        cols += [f"a{a}_{m}" for m in (sh, el) for a in "xy"]
+        if set(cols) <= set(kin):
+            ok = _valid_rows(kin, cols)
+            if ok.sum() >= 3:
+                k = kin.loc[ok]
+                res = inverse_dynamics_upper_limb_2d(
+                    k["time_s"].to_numpy(float),
+                    {"upper_arm": _seg_series(k, "brazo", "theta"), "forearm": _seg_series(k, "antebrazo", "theta")},
+                    {"upper_arm": _seg_series(k, "brazo", "omega"), "forearm": _seg_series(k, "antebrazo", "omega")},
+                    {"upper_arm": _seg_series(k, "brazo", "alpha"), "forearm": _seg_series(k, "antebrazo", "alpha")},
+                    _xy_accel(k, sh), _xy_accel(k, el),
+                    UpperLimb(segment("upper_arm", sh, el), segment("forearm", el, wr), gravity_m_s2))
+                out["tren_superior"] = res
 
-                    grf_x, grf_z = interp("force_x"), interp("force_z")
-                    cop = np.column_stack([interp("cop_x"), interp("cop_z")])
-                else:
-                    grf_x = np.zeros(len(tk))
-                    grf_z = np.zeros(len(tk))
-                    cop = np.zeros((len(tk), 2))
-
-                angles = {
-                    key: kin[f"theta_seg_{column}"].to_numpy(float)[common]
-                    for key, column in segment_columns.items()
-                }
-                omega = {
-                    key: kin[f"omega_seg_{column}"].to_numpy(float)[common]
-                    for key, column in segment_columns.items()
-                }
-                alpha = {
-                    key: kin[f"alpha_seg_{column}"].to_numpy(float)[common]
-                    for key, column in segment_columns.items()
-                }
-                result = inverse_dynamics_2d(
-                    tk, angles, omega, alpha, grf_x, grf_z, cop,
-                    np.column_stack([kin["ax_tobillo"].to_numpy(float)[common],
-                                     kin["ay_tobillo"].to_numpy(float)[common]]),
-                    params, float(spec.get("contact_threshold_n", 20.0)))
-                result["tracked_side"] = str(spec.get("tracked_side", "no especificado"))
-                if force_mode == "assume_flight_no_grf":
-                    result["external_force_mode"] = "GRF=0; fase aérea asumida"
-                result_path = out / "data/processed/inverse_dynamics" / f"{kin_group}_inverse_dynamics.csv"
-                result_path.parent.mkdir(parents=True, exist_ok=True)
-                result.to_csv(result_path, index=False)
-                if force_mode == "assume_flight_no_grf":
-                    status = "completed_assumed_flight"
-                    message = (
-                        f"Procesadas {len(result)} muestras suponiendo GRF=0 y fase aérea "
-                        "en todo el registro; no válido para interpretar fase de apoyo."
-                    )
-                    warnings.append(
-                        "M12 supone fase aérea (GRF=0) en todas las muestras; los resultados "
-                        "no representan las cargas reales durante el apoyo."
-                    )
-                else:
-                    status, message = "completed", f"Procesadas {len(result)} muestras sincronizadas."
-    if status not in ("completed", "completed_assumed_flight"):
-        warnings.append(message)
-    return _write_status(out, status, message, warnings)
+    # Tren inferior: pie-pierna-muslo con GRF=0.
+    if {"pie", "pierna", "muslo"} <= set(seg):
+        ankle, toe = seg["pie"]
+        knee, _ = seg["pierna"]
+        hip, _ = seg["muslo"]
+        cols = [f"{k}_seg_{s}" for s in ("pie", "pierna", "muslo") for k in ("theta", "omega", "alpha")]
+        cols += [f"a{a}_{ankle}" for a in "xy"]
+        if set(cols) <= set(kin):
+            ok = _valid_rows(kin, cols)
+            if ok.sum() >= 3:
+                k = kin.loc[ok]
+                n = len(k)
+                names = {"foot": "pie", "shank": "pierna", "thigh": "muslo"}
+                limb = LowerLimb(segment("foot", ankle, toe), segment("shank", knee, ankle),
+                                 segment("thigh", hip, knee), gravity_m_s2)
+                res = inverse_dynamics_2d(
+                    k["time_s"].to_numpy(float),
+                    {e: _seg_series(k, s, "theta") for e, s in names.items()},
+                    {e: _seg_series(k, s, "omega") for e, s in names.items()},
+                    {e: _seg_series(k, s, "alpha") for e, s in names.items()},
+                    np.zeros(n), np.zeros(n), np.zeros((n, 2)), _xy_accel(k, ankle), limb)
+                res["external_force_mode"] = "GRF=0; fase aérea asumida"
+                out["tren_inferior"] = res
+    return out

@@ -1,4 +1,4 @@
-"""Brazos de palanca (base de M12): distancia perpendicular de la línea de acción a una articulación.
+"""Brazos de palanca (base de la dinámica inversa): distancia perpendicular de la línea de acción a una articulación.
 
 τ = r × F = r_x F_y − r_y F_x   (positivo = antihorario, y hacia arriba)
 """

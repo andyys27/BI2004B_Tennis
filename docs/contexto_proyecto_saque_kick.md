@@ -8,6 +8,14 @@ La motivación a largo plazo es comprender cómo la técnica y la secuencia de m
 
 Este documento ofrece el macrocontexto del problema y sus objetivos. El detalle de los archivos y sus limitaciones está en [`contexto_bases_datos.md`](./contexto_bases_datos.md); el modelo propuesto de dinámica inversa está descrito en [`contexto_dinamica_inversa.md`](./contexto_dinamica_inversa.md).
 
+> **Actualización (26-nov-2026): de Kinovea a MediaPipe.** El tracking manual en Kinovea de un solo
+> saque se sustituyó por un análisis automático de los **videos completos** (5 saques de una jugadora)
+> con MediaPipe Pose, refinado con las **estampitas** adheridas a las articulaciones. Esto permite
+> comparar saques entre sí y estudiar **indicadores de posible fatiga** a lo largo de la serie. La
+> pelota se usa solo para fechar el impacto (no se mide su velocidad ni su efecto). Los CSV de
+> Kinovea quedan en `data/raw/kinovea/` como referencia histórica. Detalle del método en
+> [`pipeline_saque_kick.md`](./pipeline_saque_kick.md).
+
 ## Problema y motivación
 
 El saque kick se ejecuta numerosas veces durante un partido y depende de la coordinación de segmentos de las extremidades inferiores y superiores, el tronco y el brazo de golpeo. La repetición de patrones técnicos ineficientes podría asociarse con menor rendimiento o con cargas biomecánicas no deseadas en rodillas, tronco, hombro y codo.
@@ -32,7 +40,10 @@ Caracterizar la cinemática del saque kick en jugadores adultos del equipo repre
    donde la definición de articulaciones, coordenadas, Jacobiano y unidades debe establecerse y validarse para el modelo implementado.
 7. Explorar asociaciones entre variables cinemáticas, velocidad de pelota y consistencia entre intentos, sin interpretarlas como causalidad.
 8. Comparar las curvas obtenidas con rangos de la literatura que sean metodológicamente comparables, documentando las diferencias de población, técnica, plano y definición de cada variable.
-9. Conectar conceptualmente el análisis de los segmentos corporales con la mecánica del sólido continuo y dejar preparado un camino de evolución hacia fuerzas y torques mediante datos cinéticos sincronizados y un modelo de dinámica inversa validado.
+9. Describir la evolución de variables cinemáticas a lo largo de la serie de saques (picos de
+   velocidad, flexión de rodilla, duración de fases, variabilidad) como **indicadores exploratorios
+   de posible fatiga**, sin interpretarlos como medida fisiológica de fatiga.
+10. Conectar conceptualmente el análisis de los segmentos corporales con la mecánica del sólido continuo y dejar preparado un camino de evolución hacia fuerzas y torques mediante datos cinéticos sincronizados y un modelo de dinámica inversa validado.
 
 ## Hipótesis de trabajo
 
@@ -55,7 +66,11 @@ Estas son hipótesis direccionales de trabajo. En particular, la formulación de
 - Frecuencia nominal indicada: 120 fps.
 - Altura aproximada de cámara: 1.30 m.
 - Vara de 1 m como referencia de escala.
-- Los marcadores se siguen en Kinovea y las exportaciones se procesan posteriormente con Python.
+- Estampitas verde-amarillo adheridas a hombro, codo, muñeca, cadera, rodilla, tobillo y punta del pie.
+- Registro continuo de **5 saques** por vista (~45 s cada video; 120 fps nominal, ~120.16 fps real,
+  con fotogramas perdidos al inicio que el pipeline detecta por el tiempo de presentación).
+- Pose 2D con MediaPipe sobre cada fotograma; las estampitas refinan la posición donde se detectan.
+  (Versión anterior: marcadores seguidos manualmente en Kinovea, un solo saque.)
 
 La vara permite establecer una escala espacial por vista, pero no corrige automáticamente perspectiva o distorsión. Se debe documentar la posición/orientación de cámara, el plano de movimiento, la escala aplicada y la calidad de la calibración. Las dos vistas 2D no constituyen por sí mismas una reconstrucción 3D: cualquier fusión entre vistas requiere calibración y sincronización apropiadas.
 
@@ -134,4 +149,4 @@ Los parámetros antropométricos de un sujeto descritos allí no deben generaliz
 
 ## Resultado esperado del proyecto
 
-Un pipeline reproducible en Python que convierta videos y exportaciones de Kinovea en series cinemáticas calibradas, sincronizadas y documentadas; describa patrones por fase e intento; explore relaciones entre coordinación corporal y velocidad de la pelota cuando esta se mida; y deje claros los requisitos y límites para una futura extensión a dinámica inversa y análisis de cargas biomecánicas.
+Un pipeline reproducible en Python que convierta los videos (MediaPipe + estampitas) en series cinemáticas calibradas, sincronizadas y documentadas; describa patrones por fase e intento; explore relaciones entre coordinación corporal y velocidad de la pelota cuando esta se mida; y deje claros los requisitos y límites para una futura extensión a dinámica inversa y análisis de cargas biomecánicas.

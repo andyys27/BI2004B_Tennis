@@ -1,7 +1,14 @@
 .env
-saque.egg-info
+*.egg-info
 __pycache__
-bdist.linux-x86_64
+.pytest_cache
+build/
+# Videos (>100 MB, límite de GitHub) y modelos descargables
+data/raw/video/*.mp4
+models/
+# Salidas regenerables
 data/interim
 data/processed
-reports/
+reports/figures
+reports/tables
+reports/videos

@@ -1,4 +1,4 @@
-"""[M8] Velocidad de la mano con el Jacobiano:  v = v_hombro + J(θ) ω  (brazo planar de 2 eslabones).
+"""Velocidad de la mano con el Jacobiano:  v = v_hombro + J(θ) ω  (brazo planar de 2 eslabones).
 
 Ángulos absolutos θ1 (brazo) y θ2 (antebrazo) respecto a la horizontal, y hacia arriba.
 OJO: la validación frente a la derivada directa de la muñeca es casi una identidad (las longitudes
@@ -12,8 +12,10 @@ import pandas as pd
 
 def segment_lengths(df: pd.DataFrame, prox: str, dist: str) -> dict:
     d = np.hypot(df[f"x_{dist}"] - df[f"x_{prox}"], df[f"y_{dist}"] - df[f"y_{prox}"]).to_numpy()
-    return dict(L=float(np.median(d)), cv=float(np.std(d) / np.mean(d)), l_min=float(d.min()),
-                l_max=float(d.max()))
+    if not np.isfinite(d).any():
+        return dict(L=np.nan, cv=np.nan, l_min=np.nan, l_max=np.nan)
+    return dict(L=float(np.nanmedian(d)), cv=float(np.nanstd(d) / np.nanmean(d)),
+                l_min=float(np.nanmin(d)), l_max=float(np.nanmax(d)))
 
 
 def jacobian_2link(th1, th2, L1: float, L2: float) -> np.ndarray:
@@ -61,10 +63,11 @@ def jacobian_from_kinematics(kin: pd.DataFrame, filt: pd.DataFrame, upper="brazo
     out = pd.concat([out, contributions(J, kin[f"omega_seg_{upper}"], kin[f"omega_seg_{fore}"], vJ - vs)],
                     axis=1)
     pico = float(out["speed_directa"].max())
-    rmse = float(np.sqrt(np.mean((out["speed_J"] - out["speed_directa"]) ** 2)))
+    ok = np.isfinite(out[["speed_J", "speed_directa"]].to_numpy()).all(axis=1)
+    rmse = float(np.sqrt(np.mean((out.loc[ok, "speed_J"] - out.loc[ok, "speed_directa"]) ** 2)))
     met = dict(L_brazo=l1["L"], cv_brazo=l1["cv"], L_antebrazo=l2["L"], cv_antebrazo=l2["cv"],
                rmse_speed=rmse, rmse_rel_pico=rmse / pico if pico else np.nan,
-               corr_speed=float(np.corrcoef(out["speed_J"], out["speed_directa"])[0, 1]),
+               corr_speed=float(np.corrcoef(out.loc[ok, "speed_J"], out.loc[ok, "speed_directa"])[0, 1]),
                pico_speed_directa=pico, pico_speed_J=float(out["speed_J"].max()),
                longitud_rigida=bool(max(l1["cv"], l2["cv"]) <= cv_warn),
                nota=("" if max(l1["cv"], l2["cv"]) <= cv_warn else
